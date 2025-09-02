@@ -1,0 +1,71 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'   # create a release by tagging vMAJOR.MINOR.PATCH
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        rust: [stable]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          components: rustfmt
+          profile: minimal
+
+      - name: Setup target (Windows on Windows runner, etc.)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          rustup target add x86_64-unknown-linux-gnu
+      - name: Setup target (mac)
+        if: matrix.os == 'macos-latest'
+        run: |
+          rustup target add x86_64-apple-darwin || true
+      - name: Setup target (windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          rustup target add x86_64-pc-windows-gnu || true
+
+      - name: Build release
+        run: |
+          cd ouro_dag
+          cargo build --release -Zminimal-versions
+
+      - name: Package artifact
+        run: |
+          cd ouro_dag/target/release
+          mkdir -p dist
+          if [[ "${{ matrix.os }}" == "ubuntu-latest" ]]; then
+            cp ouro-node dist/ouro-node-linux-x86_64
+            tar -czf ouro-node-linux-x86_64.tar.gz -C dist ouro-node-linux-x86_64
+            ls -l ouro-node-linux-x86_64.tar.gz
+          elif [[ "${{ matrix.os }}" == "macos-latest" ]]; then
+            cp ouro-node dist/ouro-node-macos-x86_64
+            tar -czf ouro-node-macos-x86_64.tar.gz -C dist ouro-node-macos-x86_64
+            ls -l ouro-node-macos-x86_64.tar.gz
+          fi
+
+      - name: Zip for windows
+        if: matrix.os == 'windows-latest'
+        run: |
+          cd ouro_dag/target/release
+          powershell Compress-Archive -Path ouro-node.exe -DestinationPath ouro-node-windows-x86_64.zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: "ouro-node-${{ matrix.os }}"
+          path: |
+            oro_dag/target/release/*.tar.gz
+            ouro_dag/target/release/*.zip
+            ouro_dag/target/release/ouro-node*

@@ -1,0 +1,9 @@
+# Ignore git history
+.git
+
+# Ignore build artifacts
+target/
+
+# Ignore local data
+rocksdb_data/
+sled_data/

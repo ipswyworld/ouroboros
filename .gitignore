@@ -1,0 +1,22 @@
+# Rust build artifacts
+/target/
+
+# Local data directories
+/ouro_dag/sled_data/
+/ouro_dag/sled_data_2/
+/node1_data/
+/node2_data/
+/postgres_data/
+/pgadmin_data/
+
+# Ignore environment files
+.env
+**/.env
+
+# Ignore python cache and virtual environments
+**/__pycache__/
+**/.venv/
+
+# Ignore editor backups
+*.bak
+*~

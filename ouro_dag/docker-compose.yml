@@ -1,0 +1,30 @@
+services:
+  node1:
+    build: .
+    container_name: ouro_node1
+    environment:
+      - LISTEN_ADDR=0.0.0.0:9001
+      - PEER_ADDRS=node2:9002
+      - ROCKSDB_PATH=/data/rocksdb
+    ports:
+      - "9001:9001"
+    volumes:
+      - node1_data:/data
+    restart: on-failure
+
+  node2:
+    build: .
+    container_name: ouro_node2
+    environment:
+      - LISTEN_ADDR=0.0.0.0:9002
+      - PEER_ADDRS=node1:9001
+      - ROCKSDB_PATH=/data/rocksdb
+    ports:
+      - "9002:9002"
+    volumes:
+      - node2_data:/data
+    restart: on-failure
+
+volumes:
+  node1_data:
+  node2_data:

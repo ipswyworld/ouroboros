@@ -1,0 +1,132 @@
+# .github/workflows/ci.yml
+name: CI & Release
+
+on:
+  push:
+    branches: [ main, master ]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready -U postgres
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+
+    env:
+      DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
+      RUST_BACKTRACE: "1"
+      USE_REAL_CRYPTO: "1"
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          profile: minimal
+          components: clippy
+
+      - name: Cache cargo registry and target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install psql client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+
+      - name: Wait for Postgres
+        run: |
+          for i in {1..30}; do
+            pg_isready -h 127.0.0.1 -p 5432 -U postgres && break
+            sleep 1
+          done
+
+      - name: Run DB migrations (SQL files)
+        working-directory: ./ouro_dag
+        run: |
+          for f in $(ls migrations/*.sql | sort); do
+            echo "running $f"
+            psql "$DATABASE_URL" -f "$f"
+          done
+
+      - name: Build
+        working-directory: ./ouro_dag
+        run: cargo build --verbose
+
+      - name: Run tests
+        working-directory: ./ouro_dag
+        run: cargo test --verbose
+
+  release:
+    needs: test
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact_name: ouro-node-linux-x86_64.tar.gz
+            asset_content_type: application/gzip
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_name: ouro-node-windows-x86_64.zip
+            asset_content_type: application/zip
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact_name: ouro-node-macos-x86_64.tar.gz
+            asset_content_type: application/gzip
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          profile: minimal
+          target: ${{ matrix.target }}
+
+      - name: Build binaries
+        working-directory: ./ouro_dag
+        run: cargo build --release --target ${{ matrix.target }} --bin ouro-node --bin ouro_dag
+
+      - name: Package artifact (Linux/macOS)
+        if: runner.os != 'Windows'
+        working-directory: ./ouro_dag/target/${{ matrix.target }}/release
+        run: tar -czvf ../../../${{ matrix.artifact_name }} ouro-node ouro_dag
+
+      - name: Package artifact (Windows)
+        if: runner.os == 'Windows'
+        working-directory: .\ouro_dag\target\${{ matrix.target }}\release
+        run: 7z a ..\..\..\${{ matrix.artifact_name }} ouro-node.exe ouro_dag.exe
+
+      - name: Upload Release Asset
+        uses: softprops/action-gh-release@v1
+        with:
+          files: ${{ matrix.artifact_name }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
