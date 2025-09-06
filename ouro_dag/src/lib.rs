@@ -11,7 +11,7 @@ pub mod storage;
 pub mod vm;
 
 use crate::crypto::verify_ed25519_hex;
-use api::router;
+
 use bft::consensus::{finalize_block, BFTNode};
 use chrono::Utc;
 use dag::dag::DAG;
@@ -31,8 +31,8 @@ use std::time::{Duration, Instant};
 use storage::{batch_put, open_db, put, RocksDb};
 use uuid::Uuid;
 use serde_json::Value as JsonValue;
+use hex;
 
-/// Incoming file-based transaction format
 #[derive(Deserialize)]
 pub struct IncomingFileTxn {
     sender: String,
@@ -134,8 +134,7 @@ pub fn split_sql_statements(sql: &str) -> Vec<String> {
         }
 
         if in_block_comment {
-            if ch == '*'
-            {
+            if ch == '*' {
                 if let Some(&'/') = chars.peek() {
                     chars.next();
                     in_block_comment = false;
@@ -218,8 +217,7 @@ pub fn split_sql_statements(sql: &str) -> Vec<String> {
                     tag.push(nc);
                     break;
                 }
-                if nc.is_ascii_alphanumeric() || nc == '_'
-                {
+                if nc.is_ascii_alphanumeric() || nc == '_' {
                     tag.push(nc);
                     p.next();
                     continue;
@@ -246,8 +244,7 @@ pub fn split_sql_statements(sql: &str) -> Vec<String> {
             continue;
         }
 
-        if ch == ';'
-        {
+        if ch == ';' {
             let s = cur.trim();
             if !s.is_empty() {
                 out.push(s.to_string());
@@ -281,7 +278,9 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), Box<dyn Error>> {
     .execute(pool)
     .await?;
 
-    let mut entries: Vec<_> = std::fs::read_dir("./migrations")? 
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let migrations_path = std::path::Path::new(manifest_dir).join("migrations");
+    let mut entries: Vec<_> = std::fs::read_dir(migrations_path)?
         .filter_map(|r| r.ok())
         .filter(|e| e.file_name().to_string_lossy().ends_with(".sql"))
         .collect();
@@ -292,11 +291,11 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), Box<dyn Error>> {
         let fname = entry.file_name().to_string_lossy().into_owned();
 
         // skip if already applied
-        let already: Option<(String,)> = 
+        let already: Option<(String,)> =
             sqlx::query_as("SELECT filename FROM schema_migrations WHERE filename = $1")
                 .bind(&fname)
                 .fetch_optional(pool)
-                .await? 
+                .await?
                 .map(|r: (String,)| r);
 
         if already.is_some() {
@@ -317,7 +316,7 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), Box<dyn Error>> {
             println!(" > statement #{}: {}", i + 1, small);
 
             match sqlx::query(&stmt).execute(pool).await {
-                Ok(_) => {} 
+                Ok(_) => {}
                 Err(err) => {
                     match &err {
                         sqlx::Error::Database(db_err) => {
@@ -328,7 +327,7 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), Box<dyn Error>> {
                                 continue;
                             }
                         }
-                        _ => {} 
+                        _ => {}
                     }
                     return Err(Box::new(err));
                 }
@@ -368,10 +367,16 @@ pub async fn run() -> std::io::Result<()> {
         panic!("migrations failed");
     }
 
-    // start API server (axum)
+    // start P2P network first so we have peer_store to pass into API router
+    let listen = std::env::var("LISTEN_ADDR").unwrap_or_else(|_| "0.0.0.0:9000".into());
+    let (bcast_sender, mut inbound_rx, peer_store) = start_network(&listen).await;
+
+    
+
+    // start API server (axum) - pass api_peer_store into router
     let api_addr = std::env::var("API_ADDR").unwrap_or_else(|_| "0.0.0.0:8000".into());
     let api_addr_parsed: SocketAddr = api_addr.parse().expect("API_ADDR invalid");
-    let router = router(db_pool.clone());
+    let router = crate::api::router(db_pool.clone(), peer_store.clone());
     tokio::spawn(async move {
         println!("Starting API server on {}", api_addr_parsed);
         axum::Server::bind(&api_addr_parsed)
@@ -386,10 +391,6 @@ pub async fn run() -> std::io::Result<()> {
     // mempool
     let mempool = Mempool::new(db.clone());
     let mempool_arc = Arc::new(mempool);
-
-    // start P2P network
-    let listen = std::env::var("LISTEN_ADDR").unwrap_or_else(|_| "0.0.0.0:9000".into());
-    let (bcast_sender, mut inbound_rx) = start_network(&listen).await;
 
     // validators (simulated)
     let validators = vec![
@@ -417,13 +418,13 @@ pub async fn run() -> std::io::Result<()> {
 
     // inbound p2p handler (spawn)
     let mempool_for_inbound = mempool_arc.clone();
-    let db_pool_for_inbound = db_pool.clone();
+    let _db_pool_for_inbound = db_pool.clone();
     tokio::spawn(async move {
         while let Some(txn) = inbound_rx.recv().await {
             let message = format!("{}:{}:{}", txn.sender, txn.recipient, txn.amount);
 
             // Strict verification — require real ed25519 verification (no fallback)
-            let verified = 
+            let verified =
                 verify_ed25519_hex(&txn.public_key, &txn.signature, message.as_bytes());
             if !verified {
                 println!("P2P inbound txn signature invalid: {}", txn.id);
@@ -513,12 +514,12 @@ pub async fn run() -> std::io::Result<()> {
                             };
 
                             // Insert into blocks
-                            if let Err(e) = 
+                            if let Err(e) =
                                 sqlx::query("INSERT INTO blocks (id, payload) VALUES ($1, $2)")
-                                .bind(block.id)
-                                .bind(block_json)
-                                .execute(&mut tx_sql)
-                                .await 
+                                    .bind(block.id)
+                                    .bind(block_json)
+                                    .execute(&mut tx_sql)
+                                    .await
                             {
                                 println!("Failed to insert block into Postgres: {}", e);
                                 let _ = tx_sql.rollback().await;
@@ -538,7 +539,7 @@ pub async fn run() -> std::io::Result<()> {
                                     .bind(txid)
                                     .bind(block.id)
                                     .execute(&mut tx_sql)
-                                    .await 
+                                    .await
                                 {
                                     println!("Failed to insert tx_index for {}: {}", txid, e);
                                     failed = true;

@@ -1,15 +1,12 @@
 // src/api.rs
 // Axum-based API router for transaction submit + basic checks
 use crate::storage::{open_db, get_str};
-use std::env;
 
-use axum::{
-    extract::{Extension, Path},
-    http::StatusCode,
-    response::{IntoResponse, Json, Response},
-    routing::{get, post},
-    Router,
-};
+use axum::extract::{Extension, Path};
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Json, Response};
+use axum::routing::{get, post};
+use axum::Router;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use sqlx::{PgPool, Row};
@@ -65,19 +62,6 @@ impl IntoResponse for ApiError {
         let body_json = serde_json::json!({ "error": body });
         (status, Json(body_json)).into_response()
     }
-}
-
-/// Build router for this microservice (call from main)
-pub fn router(db_pool: PgPool) -> Router {
-    Router::new()
-        .route("/tx/submit", post(submit_tx))
-        .route("/mempool", get(get_mempool))
-        .route("/tx/:id", get(get_tx_by_id_or_hash))      // accepts uuid or tx_hash; we try both
-        .route("/tx/hash/:hash", get(get_tx_by_hash))     // explicit hash lookup
-        .route("/block/:id", get(get_block_by_id))        // placeholder route
-        .route("/proof/:tx", get(get_proof_by_tx))
-        .route("/health", get(health))
-        .layer(Extension(db_pool))
 }
 
 ///////////////////////////////////////////////////////////////////////////
@@ -453,8 +437,58 @@ async fn health(Extension(db_pool): Extension<PgPool>) -> ApiResult {
     }
 }
 
+/// GET /peers - returns the runtime peer store as JSON array (full metadata)
+async fn get_peers(
+    Extension(peer_store): Extension<crate::network::PeerStore>
+) -> Result<impl IntoResponse, ApiError> {
+    let store = peer_store.lock().await;
+    let out: Vec<_> = store.iter().map(|e| {
+        serde_json::json!({
+            "addr": e.addr,
+            "last_seen": e.last_seen_unix,
+            "failures": e.failures,
+            "banned_until": e.banned_until_unix,
+        })
+    }).collect();
+    Ok((StatusCode::OK, Json(out)))
+}
+
 #[allow(dead_code)]
 fn verify_signature(_payload: &JsonValue, _signature: Option<String>) -> Result<(), String> {
     // placeholder for future more complex verification
     Ok(())
 }
+
+/// Build router for this microservice (call from main)
+/// Accepts the runtime PeerStore so /peers can show discovered peers with metadata.
+pub fn router(db_pool: PgPool, peer_store: crate::network::PeerStore) -> Router {
+    Router::new()
+        .route("/tx/submit", post(submit_tx))
+        .route("/mempool", get(get_mempool))
+        .route("/tx/:id", get(get_tx_by_id_or_hash))      // accepts uuid or tx_hash; we try both
+        .route("/tx/hash/:hash", get(get_tx_by_hash))     // explicit hash lookup
+        .route("/block/:id", get(get_block_by_id))        // placeholder route
+        .route("/proof/:tx", get(get_proof_by_tx))
+        .route("/health", get(health))
+        .route("/peers", get(get_peers))
+        .layer(Extension(db_pool))
+        .layer(Extension(peer_store))
+}
+
+// add near other handlers
+use crate::network;
+
+async fn p2p_status(
+    Extension(_db_pool): Extension<PgPool>,
+    Extension(_peer_store): Extension<crate::network::PeerStore>
+) -> ApiResult {
+    let (conns, dedupe, peers) = network::get_p2p_metrics();
+    let payload = serde_json::json!({
+        "active_connections": conns,
+        "dedupe_entries": dedupe,
+        "known_peers": peers
+    });
+    Ok((StatusCode::OK, Json(payload)).into_response())
+}
+
+// in router() add .route("/p2p_status", get(p2p_status))

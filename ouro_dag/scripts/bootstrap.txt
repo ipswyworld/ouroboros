@@ -1,0 +1,6 @@
+# scripts/bootstrap.txt
+# one peer per line (host:port or ip:port)
+192.0.2.10:9001
+203.0.113.20:9001
+# relay endpoint (if using relay)
+your.relay.vps:9009

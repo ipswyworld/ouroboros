@@ -8,6 +8,7 @@
 /node2_data/
 /postgres_data/
 /pgadmin_data/
+/sled_data/
 
 # Ignore environment files
 .env
