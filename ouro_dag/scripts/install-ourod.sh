@@ -1,169 +1,141 @@
 #!/usr/bin/env bash
-# install-ourod.sh
-# Minimal installer for the Ouroboros node (ouro-node).
-#
-# Usage:
-#   VERSION=latest ./install-ourod.sh            # install latest release binary (if provided)
-#   VERSION=v0.1.0 ./install-ourod.sh            # install specific tag
-#   ./install-ourod.sh --from-source             # build & install from source (requires rust toolchain)
-#   sudo ./install-ourod.sh                      # run with sudo to place files into /usr/local/bin and create systemd unit
-#
 set -euo pipefail
 
-# -------------------------
-# CONFIG (edit for your project)
-# -------------------------
-GITHUB_OWNER="${GITHUB_OWNER:-your-github-org-or-user}"   # replace before hosting, or export env var
-GITHUB_REPO="${GITHUB_REPO:-ouro_dag}"                    # replace before hosting, or export env var
-BIN_NAME="${BIN_NAME:-ouro-node}"                         # binary installed
-RELAY_BIN="${RELAY_BIN:-relay}"                           # optional relay binary name (if present in release)
-INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
-SYSTEMD_UNIT_DIR="${SYSTEMD_UNIT_DIR:-/etc/systemd/system}"
-ENV_DIR="${ENV_DIR:-/etc/ouro-node}"
-SERVICE_USER="${SERVICE_USER:-ouro}"
-CREATE_SYSTEMD="${CREATE_SYSTEMD:-yes}"
+# Simple installer for ouro-node (build-from-source)
+# Usage: sudo bash install-ourod.sh [--no-postgres] [--skip-rust]
+# Run as root or via sudo.
 
-# -------------------------
-# helpers
-# -------------------------
-log() { printf "%s\n" "$*" >&2; }
-err() { printf "ERROR: %s\n" "$*" >&2; exit 1; }
+REPO_DIR=${REPO_DIR:-/opt/ouroboros/ouro_dag}
+BINARY_NAME=${BINARY_NAME:-ouro-node}
+SERVICE_USER=${SERVICE_USER:-ouro}
+SERVICE_HOME=/home/${SERVICE_USER}
+ENV_FILE=/etc/ouro-node/ouro-node.env
+SYSTEMD_UNIT=/etc/systemd/system/ouro-node.service
 
-# detect OS/ARCH for release asset naming
-OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
-ARCH="$(uname -m)"
-case "$ARCH" in
-  x86_64|amd64) ARCH="x86_64" ;;
-  aarch64|arm64) ARCH="aarch64" ;;
-  *) ARCH="$ARCH" ;;
-esac
+echo "==> Installer starting. REPO_DIR=${REPO_DIR}"
 
-# defaults
-VERSION="${VERSION:-latest}"
-FROM_SOURCE=0
+# 1) Create service user
+if ! id -u ${SERVICE_USER} >/dev/null 2>&1; then
+  echo "Creating service user ${SERVICE_USER}"
+  useradd --system --create-home --shell /usr/sbin/nologin ${SERVICE_USER}
+fi
 
-# parse args
-while [ $# -gt 0 ]; do
-  case "$1" in
-    --from-source) FROM_SOURCE=1; shift ;;
-    --no-systemd) CREATE_SYSTEMD="no"; shift ;;
-    --help|-h) printf "%s\n" "Usage: $0 [--from-source] [--no-systemd]"; exit 0 ;;
-    *) shift ;;
-  esac
-done
+# 2) Install OS packages
+export DEBIAN_FRONTEND=noninteractive
+apt-get update
+apt-get install -y build-essential curl ca-certificates git jq \
+  pkg-config libssl-dev llvm clang lld g++ libclang-dev \
+  postgresql postgresql-contrib openssh-client
 
-# choose install method
-if [ "$FROM_SOURCE" -eq 1 ]; then
-  log "Building from source (requires Rust toolchain)..."
-  if ! command -v cargo >/dev/null 2>&1; then
-    err "cargo not found in PATH. Install Rust toolchain (rustup)."
-  fi
-  tmpd="$(mktemp -d)"
-  trap 'rm -rf "$tmpd"' EXIT
-  log "Cloning ${GITHUB_OWNER}/${GITHUB_REPO}..."
-  git clone --depth=1 "https://github.com/${GITHUB_OWNER}/${GITHUB_REPO}.git" "$tmpd"
-  cd "$tmpd"
-  log "Building release binaries..."
-  cargo build --release --bins
-  # copy + install
-  if [ ! -f "target/release/${BIN_NAME}" ]; then
-    err "Built binary not found: target/release/${BIN_NAME}"
-  fi
-  sudo install -m 755 "target/release/${BIN_NAME}" "${INSTALL_DIR}/${BIN_NAME}"
-  if [ -f "target/release/${RELAY_BIN}" ]; then
-    sudo install -m 755 "target/release/${RELAY_BIN}" "${INSTALL_DIR}/${RELAY_BIN}"
-  fi
-  log "Installed binaries to ${INSTALL_DIR}"
+# 3) Optional: sccache (if available in apt)
+if command -v sccache >/dev/null 2>&1; then
+  echo "sccache already installed"
 else
-  # download release asset (binary) from GitHub releases
-  if [ "${VERSION}" = "latest" ]; then
-    # follow redirect to find tag
-    redirect=$(curl -fsI "https://github.com/${GITHUB_OWNER}/${GITHUB_REPO}/releases/latest" | tr -d '\r' | awk '/^location: /{print $2}' | tail -n1)
-    if [ -n "$redirect" ]; then
-      # redirect looks like /owner/repo/releases/tag/v0.1.0
-      VERSION="$(basename "$redirect")"
-      log "Resolved latest release tag: ${VERSION}"
-    else
-      err "Failed to resolve latest release tag. Use VERSION=... to specify."
-    fi
-  fi
-
-  # expected asset name (you must publish this asset in releases):
-  ASSET_NAME="${BIN_NAME}-${OS}-${ARCH}"
-  ASSET_URL="https://github.com/${GITHUB_OWNER}/${GITHUB_REPO}/releases/download/${VERSION}/${ASSET_NAME}"
-
-  log "Downloading release binary ${ASSET_URL} ..."
-  tmpf="$(mktemp)"
-  trap 'rm -f "$tmpf"' EXIT
-  if ! curl -fL -o "$tmpf" "$ASSET_URL"; then
-    err "Failed to download ${ASSET_URL}. Make sure the asset exists in the release (or use --from-source)."
-  fi
-  sudo install -m 755 "$tmpf" "${INSTALL_DIR}/${BIN_NAME}"
-  log "Installed ${BIN_NAME} -> ${INSTALL_DIR}/${BIN_NAME}"
-  # optional relay asset
-  ASSET_RELAY="${RELAY_BIN}-${OS}-${ARCH}"
-  ASSET_RELAY_URL="https://github.com/${GITHUB_OWNER}/${GITHUB_REPO}/releases/download/${VERSION}/${ASSET_RELAY}"
-  if curl -fL -o /tmp/relay.asset "$ASSET_RELAY_URL" 2>/dev/null; then
-    sudo install -m 755 /tmp/relay.asset "${INSTALL_DIR}/${RELAY_BIN}"
-    log "Installed ${RELAY_BIN} -> ${INSTALL_DIR}/${RELAY_BIN}"
-    rm -f /tmp/relay.asset
+  if apt-get install -y sccache; then
+    echo "installed sccache"
   fi
 fi
 
-# create service user if missing (best-effort)
-if id -u "$SERVICE_USER" >/dev/null 2>&1; then
-  log "Service user ${SERVICE_USER} exists."
-else
-  log "Creating system user ${SERVICE_USER}..."
-  sudo useradd --system --no-create-home --shell /usr/sbin/nologin "$SERVICE_USER" || true
+# 4) Install rustup + toolchain if not present
+if ! command -v rustc >/dev/null 2>&1; then
+  echo "Installing rustup + stable toolchain"
+  curl https://sh.rustup.rs -sSf | sh -s -- -y
+  export PATH="$HOME/.cargo/bin:$PATH"
 fi
 
-# create env dir
-if [ "$CREATE_SYSTEMD" = "yes" ]; then
-  sudo mkdir -p "${ENV_DIR}"
-  sudo chown "$SERVICE_USER":"$SERVICE_USER" "${ENV_DIR}" || true
-  # sample env file
-  cat <<'EOF' | sudo tee "${ENV_DIR}/ouro-node.env" >/dev/null
-# sample env file for ouro-node (edit as needed)
+# Make Rust tools available for root and service user (non-login)
+export PATH="$HOME/.cargo/bin:$PATH"
+
+# 5) Clone (or update) repo
+mkdir -p "$(dirname "${REPO_DIR}")"
+if [ -d "${REPO_DIR}/.git" ]; then
+  echo "Updating repository"
+  sudo -u ${SERVICE_USER} git -C "${REPO_DIR}" pull --ff-only
+else
+  echo "Cloning repository to ${REPO_DIR}"
+  git clone https://github.com/ipswyworld/ouroboros "${REPO_DIR}"
+fi
+
+chown -R ${SERVICE_USER}:${SERVICE_USER} "${REPO_DIR}"
+
+# 6) Create environment directory and default env file
+mkdir -p /etc/ouro-node
+cat > ${ENV_FILE} <<'EOF'
+# example: tune these before starting
 API_ADDR=0.0.0.0:8000
 LISTEN_ADDR=0.0.0.0:9000
-DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5432/postgres
-ROCKSDB_PATH=/var/lib/ouro/kv
-NODE_ID=node-1
-#NODE_KEYPAIR_HEX=
-PEER_ADDRS=
-BOOTSTRAP_URL=
+DATABASE_URL=postgres://ouro:ouropass@127.0.0.1:5432/ourodb
+NODE_ID= # optional, set to stable node id
+PEER_ADDRS= # comma separated peer addresses like "34.171.55.190:9000"
+BOOTSTRAP_URL= # optional
+NODE_KEYPAIR_HEX= # optional 64-byte hex keypair
 EOF
-  sudo chown "$SERVICE_USER":"$SERVICE_USER" "${ENV_DIR}/ouro-node.env" || true
+
+chmod 640 ${ENV_FILE}
+chown root:root ${ENV_FILE}
+
+# 7) Setup Postgres DB and user (if missing)
+sudo -u postgres psql -v ON_ERROR_STOP=1 <<'SQL' || true
+CREATE USER ouro WITH PASSWORD 'ouropass';
+CREATE DATABASE ourodb OWNER ouro;
+GRANT ALL PRIVILEGES ON DATABASE ourodb TO ouro;
+SQL
+
+# 8) Build the node (release)
+# switch to service user to perform build for proper filesystem ownership
+sudo -u ${SERVICE_USER} bash -lc "
+set -e
+cd ${REPO_DIR}
+# source rust env if it exists for root
+if [ -f /root/.cargo/env ]; then
+  . /root/.cargo/env
 fi
 
-# create systemd unit (optional)
-if [ "$CREATE_SYSTEMD" = "yes" ]; then
-  sudo tee "${SYSTEMD_UNIT_DIR}/ouro-node.service" >/dev/null <<EOF
+# optional: use sccache if available
+if command -v sccache >/dev/null 2>&1; then
+  export RUSTC_WRAPPER=\$(which sccache)
+fi
+
+export RUSTFLAGS='-C link-arg=-fuse-ld=lld'
+# build release
+cargo build --release
+"
+
+# 9) Install binary to /usr/local/bin
+BIN_SRC="${REPO_DIR}/target/release/ouro-node"
+if [ -f "${BIN_SRC}" ]; then
+  cp "${BIN_SRC}" /usr/local/bin/ouro-node
+  chown root:root /usr/local/bin/ouro-node
+  chmod 0755 /usr/local/bin/ouro-node
+else
+  echo "ERROR: built binary not found at ${BIN_SRC}"
+  exit 1
+fi
+
+# 10) systemd unit
+cat > ${SYSTEMD_UNIT} <<EOF
 [Unit]
 Description=Ouroboros Node
-After=network.target
-Requires=network.target
+After=network.target postgresql.service
+Wants=postgresql.service
 
 [Service]
 Type=simple
-EnvironmentFile=${ENV_DIR}/ouro-node.env
-ExecStart=${INSTALL_DIR}/${BIN_NAME} start
-Restart=on-failure
 User=${SERVICE_USER}
-WorkingDirectory=/var/lib/ouro
-RuntimeDirectory=ouro
-KillMode=process
+WorkingDirectory=${REPO_DIR}
+EnvironmentFile=${ENV_FILE}
+ExecStart=/usr/local/bin/ouro-node start
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
-  sudo mkdir -p /var/lib/ouro
-  sudo chown "$SERVICE_USER":"$SERVICE_USER" /var/lib/ouro || true
-  log "Installed systemd unit: ${SYSTEMD_UNIT_DIR}/ouro-node.service"
-  log "Enable & start with:"
-  log "  sudo systemctl daemon-reload && sudo systemctl enable --now ouro-node"
-fi
+systemctl daemon-reload
+systemctl enable --now ouro-node
 
-log "Done. Binary: ${INSTALL_DIR}/${BIN_NAME}"
+echo "==> Installed ouro-node. Service started (systemctl status ouro-node)."
+echo "Env file: ${ENV_FILE}"
+echo "Repo dir: ${REPO_DIR}"

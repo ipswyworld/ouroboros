@@ -1,5 +1,5 @@
 # Build stage
-FROM rust:1.82 as builder
+FROM rust:1.85 as builder
 
 # Install RocksDB native dependencies (if building with rocksdb)
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
@@ -25,6 +25,7 @@ COPY --from=builder /usr/src/ouro_dag/migrations ./migrations
 # copy scripts
 COPY --from=builder /usr/src/ouro_dag/scripts ./scripts
 RUN chmod +x ./scripts/run_migrations.sh || true
+RUN chmod +x ./ops/wait-for-db-and-start.sh || true
 
 # Create data dir for RocksDB
 VOLUME ["/data"]

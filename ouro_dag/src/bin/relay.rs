@@ -1,16 +1,25 @@
 // src/bin/relay.rs
-use std::env;
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::sync::Mutex;
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 use futures::{SinkExt, StreamExt};
 use ouro_dag::network::handshake::Envelope;
+use clap::Parser;
+
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Cli {
+    /// The port to listen on
+    #[arg(short, long, default_value_t = 9009)]
+    port: u16,
+}
 
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let port = env::args().nth(1).unwrap_or_else(|| "9009".into());
+    let cli = Cli::parse();
+    let port = cli.port;
     let addr = format!("0.0.0.0:{}", port);
     println!("Starting framed relay on {}", addr);
     let listener = TcpListener::bind(&addr).await?;

@@ -56,15 +56,7 @@ services:
       PG_HOST: postgres
       PG_PORT: "5432"
       PG_USER: "ouro"
-    ports:
-      - "9001:9001"
-      - "8001:8001"
-    volumes:
-      - node1_data:/data
-    depends_on:
-      - postgres
-    # run migration script packaged into image, then exec binary
-    command: ["bash", "-c", "/app/scripts/run_migrations.sh"]
+entrypoint: ["/app/ops/wait-for-db-and-start.sh"]
     restart: on-failure
     networks:
       - ouro_net
@@ -89,7 +81,7 @@ services:
       - node2_data:/data
     depends_on:
       - postgres
-    command: ["bash", "-c", "/app/scripts/run_migrations.sh"]
+    entrypoint: ["/app/ops/wait-for-db-and-start.sh"]
     restart: on-failure
     networks:
       - ouro_net

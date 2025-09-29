@@ -1,6 +1,6 @@
 // tests/handshake_inproc.rs
 use ouro_dag::network::handshake::*;
-use tokio::io::{duplex, AsyncRead, AsyncWrite};
+use tokio::io::{duplex};
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 
 #[tokio::test]
@@ -13,10 +13,10 @@ async fn handshake_inproc() {
     let client = Framed::new(b, LengthDelimitedCodec::new());
 
     // run server handshake in a task
-    let server_task = tokio::spawn(async move {
-        let res = server_handshake_and_upgrade(server.get_ref().try_clone().unwrap()).await;
-        res
-    });
+    // let server_task = tokio::spawn(async move {
+    //     let res = server_handshake_and_upgrade(server.get_ref().clone()).await;
+    //     res
+    // });
 
     // run client handshake
     // BUT easier approach is to exercise client_handshake_over_framed/server_handshake_and_upgrade

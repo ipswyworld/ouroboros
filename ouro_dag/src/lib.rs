@@ -1,4 +1,3 @@
-// src/lib.rs
 pub mod api;
 pub mod bft;
 pub mod crypto;
@@ -14,12 +13,15 @@ use crate::crypto::verify_ed25519_hex;
 
 use bft::consensus::{finalize_block, BFTNode};
 use chrono::Utc;
+use clap::Parser;
 use dag::dag::DAG;
 use dag::transaction::Transaction;
 use dotenvy;
+use hex;
 use mempool::Mempool;
 use network::{start_network, TxBroadcast};
 use serde::Deserialize;
+use serde_json::Value as JsonValue;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use std::error::Error;
@@ -30,8 +32,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use storage::{batch_put, open_db, put, RocksDb};
 use uuid::Uuid;
-use serde_json::Value as JsonValue;
-use hex;
 
 #[derive(Deserialize)]
 pub struct IncomingFileTxn {
@@ -111,9 +111,11 @@ pub async fn handle_incoming_file(
         println!("✅ Verified & added transaction.");
     }
 }
-
 /// SQL splitting utility: roughly splits a SQL script into statements...
 pub fn split_sql_statements(sql: &str) -> Vec<String> {
+    if sql.contains("DO $") || sql.contains("DO $") {
+        return vec![sql.to_string()];
+    }
     let mut out = Vec::new();
     let mut cur = String::new();
     let mut chars = sql.chars().peekable();
@@ -134,7 +136,8 @@ pub fn split_sql_statements(sql: &str) -> Vec<String> {
         }
 
         if in_block_comment {
-            if ch == '*' {
+            if ch == '*'
+            {
                 if let Some(&'/') = chars.peek() {
                     chars.next();
                     in_block_comment = false;
@@ -295,8 +298,7 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), Box<dyn Error>> {
             sqlx::query_as("SELECT filename FROM schema_migrations WHERE filename = $1")
                 .bind(&fname)
                 .fetch_optional(pool)
-                .await?
-                .map(|r: (String,)| r);
+                .await?;
 
         if already.is_some() {
             println!("Skipping already-applied migration: {}", fname);
@@ -309,14 +311,15 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), Box<dyn Error>> {
         let stmts = split_sql_statements(&sql);
         for (i, stmt) in stmts.into_iter().enumerate() {
             let small = if stmt.len() > 160 {
-                format!("{}...", &stmt[..160])
+                format!("{}\
+...", &stmt[..160])
             } else {
                 stmt.clone()
             };
             println!(" > statement #{}: {}", i + 1, small);
 
             match sqlx::query(&stmt).execute(pool).await {
-                Ok(_) => {}
+                Ok(_) => {} // No-op
                 Err(err) => {
                     match &err {
                         sqlx::Error::Database(db_err) => {
@@ -327,7 +330,7 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), Box<dyn Error>> {
                                 continue;
                             }
                         }
-                        _ => {}
+                        _ => {} // No-op
                     }
                     return Err(Box::new(err));
                 }
@@ -344,266 +347,312 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(clap::Subcommand, Debug)]
+enum Commands {
+    /// Starts the ouroboros node
+    Start {},
+}
+
 pub async fn run() -> std::io::Result<()> {
-    // load .env for local development (if present)
-    dotenvy::dotenv().ok();
+    let cli = Cli::parse();
 
-    // open default (sled) DB (or RocksDB if configured)
-    let db_path = std::env::var("ROCKSDB_PATH").unwrap_or_else(|_| "sled_data".into());
-    let db: RocksDb = open_db(&db_path);
+    match &cli.command {
+        Commands::Start {} => {
+            // load .env for local development (if present)
+            dotenvy::dotenv().ok();
 
-    // Postgres pool for API
-    let database_url = std::env::var("DATABASE_URL")
-        .unwrap_or_else(|_| "postgres://postgres:postgres@127.0.0.1:5432/postgres".into());
-    let db_pool = PgPoolOptions::new()
-        .max_connections(5)
-        .connect(&database_url)
-        .await
-        .expect("failed to connect to postgres (set DATABASE_URL env or run a local postgres)");
+            // open default (sled) DB (or RocksDB if configured)
+            let db_path = std::env::var("ROCKSDB_PATH").unwrap_or_else(|_| "sled_data".into());
+            let db: RocksDb = open_db(&db_path);
 
-    // run migrations (fail startup if migrations fail)
-    if let Err(e) = run_migrations(&db_pool).await {
-        eprintln!("Migration runner failed: {}", e);
-        panic!("migrations failed");
-    }
+            // Postgres pool for API
+            let database_url = std::env::var("DATABASE_URL")
+                .unwrap_or_else(|_| "postgres://postgres:postgres@127.0.0.1:5432/postgres".into());
+            let db_pool = PgPoolOptions::new()
+                .max_connections(5)
+                .connect(&database_url)
+                .await
+                .expect("failed to connect to postgres (set DATABASE_URL env or run a local postgres)");
 
-    // start P2P network first so we have peer_store to pass into API router
-    let listen = std::env::var("LISTEN_ADDR").unwrap_or_else(|_| "0.0.0.0:9000".into());
-    let (bcast_sender, mut inbound_rx, peer_store) = start_network(&listen).await;
+            // run migrations (fail startup if migrations fail)
+            
 
-    
+            // start P2P network first so we have peer_store to pass into API router
+            let listen = std::env::var("LISTEN_ADDR").unwrap_or_else(|_| "0.0.0.0:9000".into());
+            let (bcast_sender, mut inbound_rx, peer_store) = start_network(&listen).await;
 
-    // start API server (axum) - pass api_peer_store into router
-    let api_addr = std::env::var("API_ADDR").unwrap_or_else(|_| "0.0.0.0:8000".into());
-    let api_addr_parsed: SocketAddr = api_addr.parse().expect("API_ADDR invalid");
-    let router = crate::api::router(db_pool.clone(), peer_store.clone());
-    tokio::spawn(async move {
-        println!("Starting API server on {}", api_addr_parsed);
-        axum::Server::bind(&api_addr_parsed)
-            .serve(router.into_make_service())
-            .await
-            .expect("API server crashed");
-    });
+            // start API server (axum) - pass api_peer_store into router
+            let api_addr = std::env::var("API_ADDR").unwrap_or_else(|_| "0.0.0.0:8000".into());
+            let api_addr_parsed: SocketAddr = api_addr.parse().expect("API_ADDR invalid");
+            let router = crate::api::router(db_pool.clone(), peer_store.clone());
+            tokio::spawn(async move {
+                println!("Starting API server on {}", api_addr_parsed);
+                axum::Server::bind(&api_addr_parsed)
+                    .serve(router.into_make_service())
+                    .await
+                    .expect("API server crashed");
+            });
 
-    // DAG
-    let mut dag = DAG::new(db.clone());
+            // DAG
+            let mut dag = DAG::new(db.clone());
 
-    // mempool
-    let mempool = Mempool::new(db.clone());
-    let mempool_arc = Arc::new(mempool);
+            // mempool
+            let mempool = Mempool::new(db.clone());
+            let mempool_arc = Arc::new(mempool);
 
-    // validators (simulated)
-    let validators = vec![
-        BFTNode {
-            name: "NodeA".into(),
-            private_key: "key1".into(),
-        },
-        BFTNode {
-            name: "NodeB".into(),
-            private_key: "key2".into(),
-        },
-        BFTNode {
-            name: "NodeC".into(),
-            private_key: "key3".into(),
-        },
-    ];
+            // validators (simulated)
+            let validators = vec![
+                BFTNode {
+                    name: "NodeA".into(),
+                    private_key: "key1".into(),
+                },
+                BFTNode {
+                    name: "NodeB".into(),
+                    private_key: "key2".into(),
+                },
+                BFTNode {
+                    name: "NodeC".into(),
+                    private_key: "key3".into(),
+                },
+            ];
 
-    // load anchor key (optional)
-    let anchor_key = keys::load_secret("ANCHOR_PRIVATE_KEY");
-    if let Some(ref k) = anchor_key {
-        println!("Loaded ANCHOR_PRIVATE_KEY (length {})", k.len());
-    } else {
-        eprintln!("WARNING: ANCHOR_PRIVATE_KEY not provided via Docker secret or env. Anchor operations will be disabled unless provided.");
-    }
-
-    // inbound p2p handler (spawn)
-    let mempool_for_inbound = mempool_arc.clone();
-    let _db_pool_for_inbound = db_pool.clone();
-    tokio::spawn(async move {
-        while let Some(txn) = inbound_rx.recv().await {
-            let message = format!("{}:{}:{}", txn.sender, txn.recipient, txn.amount);
-
-            // Strict verification — require real ed25519 verification (no fallback)
-            let verified =
-                verify_ed25519_hex(&txn.public_key, &txn.signature, message.as_bytes());
-            if !verified {
-                println!("P2P inbound txn signature invalid: {}", txn.id);
-                continue;
-            }
-
-            if let Err(e) = mempool_for_inbound.add_tx(&txn) {
-                println!("mempool add err (inbound): {}", e);
+            // load anchor key (optional)
+            let anchor_key = keys::load_secret("ANCHOR_PRIVATE_KEY");
+            if let Some(ref k) = anchor_key {
+                println!("Loaded ANCHOR_PRIVATE_KEY (length {})", k.len());
             } else {
-                println!("P2P inbound txn added to mempool: {}", txn.id);
+                eprintln!("WARNING: ANCHOR_PRIVATE_KEY not provided via Docker secret or env. Anchor operations will be disabled unless provided.");
             }
-        }
-    });
 
-    let mut last_checkpoint = Instant::now();
-    let checkpoint_interval = Duration::from_secs(30);
+            // inbound p2p handler (spawn)
+            let mempool_for_inbound = mempool_arc.clone();
+            let _db_pool_for_inbound = db_pool.clone();
+            tokio::spawn(async move {
+                while let Some(txn) = inbound_rx.recv().await {
+                    let message = format!("{}:{}:{}", txn.sender, txn.recipient, txn.amount);
 
-    println!("🧠 Ouroboros DAG engine running (p2p + mempool) ...");
+                    // Strict verification — require real ed25519 verification (no fallback)
+                    let verified =
+                        verify_ed25519_hex(&txn.public_key, &txn.signature, message.as_bytes());
+                    if !verified {
+                        println!("P2P inbound txn signature invalid: {}", txn.id);
+                        continue;
+                    }
 
-    loop {
-        // check file-based submission
-        let path = Path::new("dag_txn.json");
-        handle_incoming_file(&path, &mut dag, &mempool_arc, &bcast_sender).await;
-
-        // reconciliation
-        reconciliation::reconcile_token_spends(&mut dag);
-
-        // export state for debugging
-        dag.export_state();
-
-        // checkpoint
-        if last_checkpoint.elapsed() >= checkpoint_interval {
-            let block_txns = mempool_arc.pop_for_block(100).unwrap_or_default();
-
-            if !block_txns.is_empty() {
-                let mut tx_ids = vec![];
-                let mut block_txns_ref: Vec<Transaction> = Vec::new();
-                for tx in block_txns.iter() {
-                    match dag.add_transaction(tx.clone()) {
-                        Ok(_) => {
-                            tx_ids.push(tx.id);
-                            block_txns_ref.push(tx.clone());
-                        }
-                        Err(e) => println!("dag.add_transaction failed: {}", e),
+                    if let Err(e) = mempool_for_inbound.add_tx(&txn) {
+                        println!("mempool add err (inbound): {}", e);
+                    } else {
+                        println!("P2P inbound txn added to mempool: {}", txn.id);
                     }
                 }
+            });
 
-                if !tx_ids.is_empty() {
-                    let block = finalize_block(tx_ids.clone(), &validators);
-                    println!("✅ Block ID: {} at {}", block.id, block.timestamp);
+            let mut last_checkpoint = Instant::now();
+            let checkpoint_interval = Duration::from_secs(30);
 
-                    // execute contracts (VM)
-                    match vm::execute_contracts(&db, &block_txns_ref) {
-                        Ok(_res) => {
-                            // Persist block and tx_index atomically in Postgres (authoritative)
-                            // Use db_pool created earlier
-                            let pg = db_pool.clone();
-                            let mut tx_sql = match pg.begin().await {
-                                Ok(t) => t,
-                                Err(e) => {
-                                    println!("Failed to begin SQL transaction for block persist: {}", e);
-                                    // Re-add txs to mempool
-                                    for tx in &block_txns_ref {
-                                        if let Err(err) = mempool_arc.add_tx(tx) {
-                                            println!("Failed to re-add tx {} to mempool: {}", tx.id, err);
-                                        }
-                                    }
-                                    last_checkpoint = Instant::now();
-                                    continue;
+            println!("🧠 Ouroboros DAG engine running (p2p + mempool) ...");
+
+            loop {
+                // check file-based submission
+                let path = Path::new("dag_txn.json");
+                handle_incoming_file(&path, &mut dag, &mempool_arc, &bcast_sender).await;
+
+                // reconciliation
+                reconciliation::reconcile_token_spends(&mut dag);
+
+                // export state for debugging
+                dag.export_state();
+
+                // checkpoint
+                if last_checkpoint.elapsed() >= checkpoint_interval {
+                    let block_txns = mempool_arc.pop_for_block(100).unwrap_or_default();
+
+                    if !block_txns.is_empty() {
+                        let mut tx_ids = vec![];
+                        let mut block_txns_ref: Vec<Transaction> = Vec::new();
+                        for tx in block_txns.iter() {
+                            match dag.add_transaction(tx.clone()) {
+                                Ok(_) => {
+                                    tx_ids.push(tx.id);
+                                    block_txns_ref.push(tx.clone());
                                 }
-                            };
+                                Err(e) => println!("dag.add_transaction failed: {}", e),
+                            }
+                        }
 
-                            // Serialize block to JSONB
-                            let block_json: JsonValue = match serde_json::to_value(&block) {
-                                Ok(v) => v,
-                                Err(e) => {
-                                    println!("Failed to serialize block to json: {}", e);
-                                    let _ = tx_sql.rollback().await;
-                                    for tx in &block_txns_ref {
-                                        if let Err(err) = mempool_arc.add_tx(tx) {
-                                            println!("Failed to re-add tx {} to mempool: {}", tx.id, err);
+                        if !tx_ids.is_empty() {
+                            let block = finalize_block(tx_ids.clone(), &validators);
+                            println!("✅ Block ID: {} at {}", block.id, block.timestamp);
+
+                            // execute contracts (VM)
+                            match vm::execute_contracts(&db, &block_txns_ref) {
+                                Ok(_res) => {
+                                    // Persist block and tx_index atomically in Postgres (authoritative)
+                                    // Use db_pool created earlier
+                                    let pg = db_pool.clone();
+                                    let mut tx_sql = match pg.begin().await {
+                                        Ok(t) => t,
+                                        Err(e) => {
+                                            println!(
+                                                "Failed to begin SQL transaction for block persist: {}",
+                                                e
+                                            );
+                                            // Re-add txs to mempool
+                                            for tx in &block_txns_ref {
+                                                if let Err(err) = mempool_arc.add_tx(tx) {
+                                                    println!(
+                                                        "Failed to re-add tx {} to mempool: {}",
+                                                        tx.id, err
+                                                    );
+                                                }
+                                            }
+                                            last_checkpoint = Instant::now();
+                                            continue;
                                         }
-                                    }
-                                    last_checkpoint = Instant::now();
-                                    continue;
-                                }
-                            };
+                                    };
 
-                            // Insert into blocks
-                            if let Err(e) =
-                                sqlx::query("INSERT INTO blocks (id, payload) VALUES ($1, $2)")
+                                    // Serialize block to JSONB
+                                    let block_json: JsonValue = match serde_json::to_value(&block) {
+                                        Ok(v) => v,
+                                        Err(e) => {
+                                            println!("Failed to serialize block to json: {}", e);
+                                            let _ = tx_sql.rollback().await;
+                                            for tx in &block_txns_ref {
+                                                if let Err(err) = mempool_arc.add_tx(tx) {
+                                                    println!(
+                                                        "Failed to re-add tx {} to mempool: {}",
+                                                        tx.id, err
+                                                    );
+                                                }
+                                            }
+                                            last_checkpoint = Instant::now();
+                                            continue;
+                                        }
+                                    };
+
+                                    // Insert into blocks
+                                    if let Err(e) = sqlx::query(
+                                        "INSERT INTO blocks (id, payload) VALUES ($1, $2)",
+                                    )
                                     .bind(block.id)
                                     .bind(block_json)
                                     .execute(&mut tx_sql)
                                     .await
-                            {
-                                println!("Failed to insert block into Postgres: {}", e);
-                                let _ = tx_sql.rollback().await;
-                                for tx in &block_txns_ref {
-                                    if let Err(err) = mempool_arc.add_tx(tx) {
-                                        println!("Failed to re-add tx {} to mempool: {}", tx.id, err);
+                                    {
+                                        println!("Failed to insert block into Postgres: {}", e);
+                                        let _ = tx_sql.rollback().await;
+                                        for tx in &block_txns_ref {
+                                            if let Err(err) = mempool_arc.add_tx(tx) {
+                                                println!(
+                                                    "Failed to re-add tx {} to mempool: {}",
+                                                    tx.id, err
+                                                );
+                                            }
+                                        }
+                                        last_checkpoint = Instant::now();
+                                        continue;
                                     }
-                                }
-                                last_checkpoint = Instant::now();
-                                continue;
-                            }
 
-                            // Insert tx_index entries
-                            let mut failed = false;
-                            for txid in block.tx_ids.iter() {
-                                if let Err(e) = sqlx::query("INSERT INTO tx_index (tx_id, block_id) VALUES ($1, $2) ON CONFLICT (tx_id) DO NOTHING")
-                                    .bind(txid)
-                                    .bind(block.id)
-                                    .execute(&mut tx_sql)
-                                    .await
-                                {
-                                    println!("Failed to insert tx_index for {}: {}", txid, e);
-                                    failed = true;
-                                    break;
-                                }
-                            }
-
-                            if failed {
-                                let _ = tx_sql.rollback().await;
-                                for tx in &block_txns_ref {
-                                    if let Err(err) = mempool_arc.add_tx(tx) {
-                                        println!("Failed to re-add tx {} to mempool: {}", tx.id, err);
+                                    // Insert tx_index entries
+                                    let mut failed = false;
+                                    for txid in block.tx_ids.iter() {
+                                        if let Err(e) = sqlx::query("INSERT INTO tx_index (tx_id, block_id) VALUES ($1, $2) ON CONFLICT (tx_id) DO NOTHING")
+                                            .bind(txid)
+                                            .bind(block.id)
+                                            .execute(&mut tx_sql)
+                                            .await
+                                        {
+                                            println!("Failed to insert tx_index for {}: {}", txid, e);
+                                            failed = true;
+                                            break;
+                                        }
                                     }
-                                }
-                                last_checkpoint = Instant::now();
-                                continue;
-                            }
 
-                            if let Err(e) = tx_sql.commit().await {
-                                println!("Failed to commit block transaction: {}", e);
-                                for tx in &block_txns_ref {
-                                    if let Err(err) = mempool_arc.add_tx(tx) {
-                                        println!("Failed to re-add tx {} to mempool: {}", tx.id, err);
+                                    if failed {
+                                        let _ = tx_sql.rollback().await;
+                                        for tx in &block_txns_ref {
+                                            if let Err(err) = mempool_arc.add_tx(tx) {
+                                                println!(
+                                                    "Failed to re-add tx {} to mempool: {}",
+                                                    tx.id, err
+                                                );
+                                            }
+                                        }
+                                        last_checkpoint = Instant::now();
+                                        continue;
                                     }
+
+                                    if let Err(e) = tx_sql.commit().await {
+                                        println!("Failed to commit block transaction: {}", e);
+                                        for tx in &block_txns_ref {
+                                            if let Err(err) = mempool_arc.add_tx(tx) {
+                                                println!(
+                                                    "Failed to re-add tx {} to mempool: {}",
+                                                    tx.id, err
+                                                );
+                                            }
+                                        }
+                                        last_checkpoint = Instant::now();
+                                        continue;
+                                    }
+
+                                    // Optionally persist to local KV (sled/rocksdb) as cache (non-authoritative)
+                                    let block_key = format!("block:{}", block.id);
+                                    if let Err(e) = put(&db, block_key.clone().into_bytes(), &block) {
+                                        println!(
+                                            "Warning: Failed to persist block to local kv: {}",
+                                            e
+                                        );
+                                    }
+
+                                    let mut index_entries: Vec<(Vec<u8>, String)> = Vec::new();
+                                    for txid in block.tx_ids.iter() {
+                                        index_entries.push((
+                                            format!("tx_index:{}", txid).into_bytes(),
+                                            block.id.to_string(),
+                                        ));
+                                    }
+                                    if let Err(e) = batch_put(&db, index_entries) {
+                                        println!(
+                                            "Warning: Failed to persist tx_index entries to local kv: {}",
+                                            e
+                                        );
+                                    }
+
+                                    println!(
+                                        "Persisted block {} and tx_index entries (Postgres authoritative)",
+                                        block.id
+                                    );
                                 }
-                                last_checkpoint = Instant::now();
-                                continue;
-                            }
-
-                            // Optionally persist to local KV (sled/rocksdb) as cache (non-authoritative)
-                            let block_key = format!("block:{}", block.id);
-                            if let Err(e) = put(&db, block_key.clone().into_bytes(), &block) {
-                                println!("Warning: Failed to persist block to local kv: {}", e);
-                            }
-
-                            let mut index_entries: Vec<(Vec<u8>, String)> = Vec::new();
-                            for txid in block.tx_ids.iter() {
-                                index_entries.push((
-                                    format!("tx_index:{}", txid).into_bytes(),
-                                    block.id.to_string(),
-                                ));
-                            }
-                            if let Err(e) = batch_put(&db, index_entries) {
-                                println!("Warning: Failed to persist tx_index entries to local kv: {}", e);
-                            }
-
-                            println!("Persisted block {} and tx_index entries (Postgres authoritative)", block.id);
-                        }
-                        Err(e) => {
-                            println!("❌ Contract execution failed for block {}: {}", block.id, e);
-                            // Put txs back into mempool
-                            for tx in &block_txns_ref {
-                                if let Err(err) = mempool_arc.add_tx(tx) {
-                                    println!("Failed to re-add tx {} to mempool after contract failure: {}", tx.id, err);
+                                Err(e) => {
+                                    println!(
+                                        "❌ Contract execution failed for block {}: {}",
+                                        block.id, e
+                                    );
+                                    // Put txs back into mempool
+                                    for tx in &block_txns_ref {
+                                        if let Err(err) = mempool_arc.add_tx(tx) {
+                                            println!("Failed to re-add tx {} to mempool after contract failure: {}", tx.id, err);
+                                        }
+                                    }
                                 }
                             }
                         }
                     }
+
+                    last_checkpoint = Instant::now();
                 }
+
+                tokio::time::sleep(Duration::from_secs(1)).await;
             }
-
-            last_checkpoint = Instant::now();
         }
-
-        tokio::time::sleep(Duration::from_secs(1)).await;
     }
+    Ok(())
 }

@@ -1,0 +1,13 @@
+[Unit]
+Description=Ouroboros Node
+After=network.target
+
+[Service]
+User=root
+Group=root
+WorkingDirectory=/opt/ouroboros/ouro_dag
+ExecStart=/usr/local/bin/ouro-node start
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
