@@ -42,9 +42,9 @@ pub struct RewardConfig {
 impl Default for RewardConfig {
     fn default() -> Self {
         Self {
-            block_proposal_reward: 100,
-            block_validation_reward: 10,
-            uptime_reward_per_hour: 5,
+            block_proposal_reward: 20,
+            block_validation_reward: 3,
+            uptime_reward_per_hour: 1,  // Note: stored as integer, actual value is 1.5 in DB
             min_uptime_for_reward: 3600, // 1 hour
         }
     }

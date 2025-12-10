@@ -44,9 +44,9 @@ CREATE TABLE IF NOT EXISTS reward_config (
 
 -- Default reward configuration (values in OURO coin base units)
 INSERT INTO reward_config (key, value, description) VALUES
-    ('block_proposal_reward', 100, 'OURO coins per block proposed'),
-    ('block_validation_reward', 10, 'OURO coins per block validated'),
-    ('uptime_reward_per_hour', 5, 'OURO coins per hour of uptime'),
+    ('block_proposal_reward', 20, 'OURO coins per block proposed'),
+    ('block_validation_reward', 3, 'OURO coins per block validated'),
+    ('uptime_reward_per_hour', 1.5, 'OURO coins per hour of uptime'),
     ('min_uptime_for_reward', 3600, 'Minimum uptime in seconds to earn rewards (1 hour)')
 ON CONFLICT (key) DO NOTHING;
 
