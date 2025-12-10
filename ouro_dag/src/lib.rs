@@ -11,6 +11,7 @@ pub mod keys;
 pub mod mempool;
 pub mod merkle;
 pub mod network;
+pub mod node_metrics; // Node tracking and rewards system
 pub mod reconciliation;
 pub mod storage;      // New storage abstraction layer
 pub mod sled_storage; // Old sled-based helpers (legacy)

@@ -110,6 +110,12 @@ enum ApiError {
 
     #[error("bad request: {0}")]
     BadRequest(String),
+
+    #[error("not found: {0}")]
+    NotFound(String),
+
+    #[error("internal error: {0}")]
+    Internal(String),
 }
 
 impl From<sqlx::Error> for ApiError {
@@ -127,6 +133,11 @@ impl IntoResponse for ApiError {
             }
             ApiError::Duplicate => (StatusCode::CONFLICT, "duplicate transaction".to_string()),
             ApiError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg.clone()),
+            ApiError::NotFound(msg) => (StatusCode::NOT_FOUND, msg.clone()),
+            ApiError::Internal(msg) => {
+                error!("Internal error: {}", msg);
+                (StatusCode::INTERNAL_SERVER_ERROR, msg.clone())
+            }
         };
         let body_json = serde_json::json!({ "error": body });
         (status, Json(body_json)).into_response()
@@ -753,7 +764,10 @@ pub fn router(
     // Public routes (no authentication required)
     let public_routes = Router::new()
         .route("/health", get(health))
-        .route("/health/detailed", get(health_detailed));
+        .route("/health/detailed", get(health_detailed))
+        .route("/metrics/:address", get(get_node_metrics))
+        .route("/metrics/leaderboard", get(get_leaderboard))
+        .route("/rewards/:address", get(get_reward_history));
 
     // Protected routes with rate limiting and authentication
     // Applies BOTH rate limiting and authentication (layers run bottom to top)
@@ -777,4 +791,41 @@ pub fn router(
         .layer(Extension(db_pool))
         .layer(Extension(peer_store))
         .layer(Extension(batch_writer))  // TPS Optimization: Batch writer for high throughput
+}
+
+///////////////////////////////////////////////////////////////////////////
+// Node Metrics and Rewards Endpoints
+///////////////////////////////////////////////////////////////////////////
+
+/// GET /metrics/:address - Get metrics for a specific validator
+async fn get_node_metrics(
+    Path(address): Path<String>,
+    Extension(db_pool): Extension<PgPool>,
+) -> ApiResult {
+    match crate::node_metrics::get_node_metrics(&db_pool, &address).await {
+        Ok(Some(metrics)) => Ok((StatusCode::OK, Json(metrics)).into_response()),
+        Ok(None) => Err(ApiError::NotFound(format!("No metrics found for node: {}", address))),
+        Err(e) => Err(ApiError::Internal(format!("Failed to get metrics: {}", e))),
+    }
+}
+
+/// GET /metrics/leaderboard - Get top validators by rewards
+async fn get_leaderboard(Extension(db_pool): Extension<PgPool>) -> ApiResult {
+    let limit = 100; // Top 100 validators
+    match crate::node_metrics::get_leaderboard(&db_pool, limit).await {
+        Ok(leaderboard) => Ok((StatusCode::OK, Json(leaderboard)).into_response()),
+        Err(e) => Err(ApiError::Internal(format!("Failed to get leaderboard: {}", e))),
+    }
+}
+
+/// GET /rewards/:address - Get reward history for a validator
+async fn get_reward_history(
+    Path(address): Path<String>,
+    Extension(db_pool): Extension<PgPool>,
+) -> ApiResult {
+    let limit = 100; // Last 100 rewards
+    match crate::node_metrics::get_reward_history(&db_pool, &address, limit).await {
+        Ok(history) => Ok((StatusCode::OK, Json(history)).into_response()),
+        Err(e) => Err(ApiError::Internal(format!("Failed to get reward history: {}", e))),
+    }
 }
