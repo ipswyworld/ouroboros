@@ -52,7 +52,7 @@ use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use storage::{batch_put, open_db, put, RocksDb};
+use sled_storage::{batch_put, open_db, put, RocksDb};
 use uuid::Uuid;
 use rustls_pemfile::{certs, pkcs8_private_keys};
 use std::io::BufReader;
@@ -774,7 +774,7 @@ pub async fn run() -> std::io::Result<()> {
             });
 
             // Initialize global storage (used by reconciliation and VM)
-            storage::init_global_storage(db.clone());
+            sled_storage::init_global_storage(db.clone());
 
             // DAG
             let mut dag = DAG::new(db.clone());

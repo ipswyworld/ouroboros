@@ -1,5 +1,5 @@
 // PostgreSQL storage implementation - wraps existing functionality
-use super::{Balance, Block, Storage, Transaction};
+use super::{Block, Storage, Transaction};
 use async_trait::async_trait;
 use sqlx::{PgPool, postgres::PgPoolOptions};
 use std::time::Duration;

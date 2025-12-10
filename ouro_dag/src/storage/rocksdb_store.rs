@@ -1,5 +1,5 @@
 // RocksDB storage implementation for lightweight nodes
-use super::{Balance, Block, Storage, Transaction};
+use super::{Block, Storage, Transaction};
 use async_trait::async_trait;
 use rocksdb::{DB, Options};
 use serde_json;

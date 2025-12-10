@@ -120,20 +120,18 @@ pub fn get_str<T: DeserializeOwned>(db: &RocksDb, key: &str) -> Result<Option<T>
     get(db, key.as_bytes())
 }
 
-#[cfg(feature = "rocksdb")]
 pub mod rocksdb_helper {
     use rocksdb::{Options, DB};
-    use num_cpus;
 
     /// Open a RocksDB instance with tuned options for high-performance local state.
     pub fn open_rocksdb(path: &str) -> DB {
         let mut opts = Options::default();
         opts.create_if_missing(true);
-        opts.increase_parallelism(num_cpus::get() as i32);
+        opts.increase_parallelism(4); // Use 4 threads by default
         opts.set_max_background_jobs(4);
         opts.set_write_buffer_size(64 * 1024 * 1024); // 64MB
         opts.set_max_total_wal_size(512 * 1024 * 1024);
-        opts.set_level0_file_num_compaction_trigger(8);
+        opts.set_level_zero_file_num_compaction_trigger(8);
         DB::open(&opts, path).unwrap()
     }
 }

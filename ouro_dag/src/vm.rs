@@ -7,13 +7,13 @@
 // - SBTContract native implementation
 // - execute_contracts function used by main during block finalization.
 
-use crate::storage::{RocksDb, put_str, get_str};
+use crate::sled_storage::{RocksDb, put_str, get_str};
 use crate::dag::transaction::Transaction;
 use serde_json::Value as JsonValue;
 use uuid::Uuid;
 
 /// Represents the result of a transaction's execution in the VM.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct TxResult {
     pub tx_id: Uuid,
     pub tx_hash: String, // Using tx.id as the hash/identifier
