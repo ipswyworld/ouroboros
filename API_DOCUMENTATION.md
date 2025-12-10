@@ -2,7 +2,7 @@
 
 Complete REST API reference for interacting with Ouroboros nodes.
 
-**Base URL**: `http://localhost:8001` (local node) or `http://34.171.88.26:8001` (seed node)
+**Base URL**: `http://localhost:8001` (local node) or `http://136.112.101.176:8001` (seed node)
 
 ---
 

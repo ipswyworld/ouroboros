@@ -14,8 +14,9 @@ bash <(curl -fsSL https://raw.githubusercontent.com/ipswyworld/ouroboros/main/jo
 ```
 
 ### Windows (PowerShell as Administrator)
+**Important**: Open **PowerShell** (not Command Prompt) as Administrator, then run:
 ```powershell
-iwr https://raw.githubusercontent.com/ipswyworld/ouroboros/main/join_ouroboros.ps1 | iex
+Invoke-WebRequest https://raw.githubusercontent.com/ipswyworld/ouroboros/main/join_ouroboros.ps1 | Invoke-Expression
 ```
 
 That's it! Your node will automatically:
@@ -70,7 +71,7 @@ HotStuff BFT consensus with:
 
 ## Network Information
 
-- **Seed Node**: `34.171.88.26:9001`
+- **Seed Node**: `136.112.101.176:9001`
 - **Network Status**: [NETWORK_INFO.md](NETWORK_INFO.md)
 - **API Documentation**: [API_DOCUMENTATION.md](API_DOCUMENTATION.md)
 - **Rewards Guide**: [REWARDS_GUIDE.md](REWARDS_GUIDE.md)

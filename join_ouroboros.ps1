@@ -78,7 +78,7 @@ try {
 Write-Host ""
 
 # Get seed node address (allow override via environment variable)
-$seedNode = if ($env:OUROBOROS_SEED) { $env:OUROBOROS_SEED } else { "34.171.88.26:9001" }
+$seedNode = if ($env:OUROBOROS_SEED) { $env:OUROBOROS_SEED } else { "136.112.101.176:9001" }
 
 Write-Host "⚙️  Configuration:" -ForegroundColor Yellow
 Write-Host "   Storage: RocksDB (lightweight, no database needed)" -ForegroundColor Gray

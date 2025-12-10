@@ -8,9 +8,9 @@ Real-time network status and seed node information.
 
 ### Primary Seed Node
 ```
-Address: 34.171.88.26:9001
-BFT Port: 34.171.88.26:9091
-API: http://34.171.88.26:8001
+Address: 136.112.101.176:9001
+BFT Port: 136.112.101.176:9091
+API: http://136.112.101.176:8001
 Region: US Central (GCP)
 Status: ✅ Online
 ```
@@ -26,17 +26,17 @@ Check real-time network stats via the API:
 
 ### Total Validators
 ```bash
-curl http://34.171.88.26:8001/metrics/leaderboard | jq 'length'
+curl http://136.112.101.176:8001/metrics/leaderboard | jq 'length'
 ```
 
 ### Top Validators
 ```bash
-curl http://34.171.88.26:8001/metrics/leaderboard | jq '.[0:10]'
+curl http://136.112.101.176:8001/metrics/leaderboard | jq '.[0:10]'
 ```
 
 ### Network Health
 ```bash
-curl http://34.171.88.26:8001/health
+curl http://136.112.101.176:8001/health
 ```
 
 ---
@@ -130,7 +130,7 @@ Major network upgrades will be announced via:
 ### Can't Connect to Seed Node
 ```bash
 # Test connectivity
-curl http://34.171.88.26:8001/health
+curl http://136.112.101.176:8001/health
 
 # Check your firewall
 sudo iptables -L | grep 9001

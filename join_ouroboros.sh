@@ -11,8 +11,9 @@ echo ""
 
 # Check if running as root
 if [ "$EUID" -eq 0 ]; then
-   echo "❌ Please do not run this script as root"
-   exit 1
+   echo "⚠️  Warning: Running as root is not recommended"
+   echo "   The node will be installed system-wide"
+   echo ""
 fi
 
 # Detect architecture
@@ -103,7 +104,7 @@ echo "✅ Binary downloaded successfully"
 echo ""
 
 # Get seed node address (allow override via environment variable)
-SEED_NODE="${OUROBOROS_SEED:-34.171.88.26:9001}"
+SEED_NODE="${OUROBOROS_SEED:-136.112.101.176:9001}"
 
 echo "⚙️  Configuration:"
 echo "   Storage: RocksDB (lightweight, no database needed)"
