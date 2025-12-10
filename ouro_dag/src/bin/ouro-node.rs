@@ -22,7 +22,11 @@ enum Commands {
         #[arg(long, default_value_t = 9000)]
         p2p_port: u16,
 
-        /// Use RocksDB path (optional)
+        /// Storage backend: "postgres" (heavy) or "rocksdb" (light) (default: postgres)
+        #[arg(long, default_value = "postgres")]
+        storage: String,
+
+        /// RocksDB path (optional, only used if --storage=rocksdb)
         #[arg(long)]
         rocksdb_path: Option<String>,
     },
@@ -45,7 +49,11 @@ enum Commands {
         #[arg(long, default_value_t = 9000)]
         p2p_port: u16,
 
-        /// RocksDB path (optional)
+        /// Storage backend: "postgres" (heavy) or "rocksdb" (light) (default: rocksdb for light nodes)
+        #[arg(long, default_value = "rocksdb")]
+        storage: String,
+
+        /// RocksDB path (optional, only used if --storage=rocksdb)
         #[arg(long)]
         rocksdb_path: Option<String>,
     },
@@ -79,14 +87,29 @@ async fn main() -> anyhow::Result<()> {
         Commands::Start {
             api_port,
             p2p_port,
+            storage,
             rocksdb_path,
         } => {
             // Set env variables the rest of the node expects
             env::set_var("API_ADDR", format!("0.0.0.0:{}", api_port));
             env::set_var("LISTEN_ADDR", format!("0.0.0.0:{}", p2p_port));
+            env::set_var("STORAGE_MODE", &storage);
+
             if let Some(p) = rocksdb_path {
                 env::set_var("ROCKSDB_PATH", p);
             }
+
+            let storage_type = if storage.to_lowercase().contains("rocks") {
+                Paint::green("RocksDB (lightweight)")
+            } else {
+                Paint::yellow("PostgreSQL (full validator)")
+            };
+
+            println!(
+                "{} Storage: {}",
+                Paint::blue("[config]").bold(),
+                storage_type
+            );
             println!(
                 "{} API -> http://127.0.0.1:{}   P2P -> 0.0.0.0:{}",
                 Paint::blue("[starting]").bold(),
@@ -103,14 +126,29 @@ async fn main() -> anyhow::Result<()> {
             bootstrap_url,
             api_port,
             p2p_port,
+            storage,
             rocksdb_path,
         } => {
             // set envs
             env::set_var("API_ADDR", format!("0.0.0.0:{}", api_port));
             env::set_var("LISTEN_ADDR", format!("0.0.0.0:{}", p2p_port));
+            env::set_var("STORAGE_MODE", &storage);
+
             if let Some(p) = rocksdb_path {
                 env::set_var("ROCKSDB_PATH", p);
             }
+
+            let storage_type = if storage.to_lowercase().contains("rocks") {
+                Paint::green("RocksDB (lightweight)")
+            } else {
+                Paint::yellow("PostgreSQL (full validator)")
+            };
+
+            println!(
+                "{} Storage: {}",
+                Paint::blue("[config]").bold(),
+                storage_type
+            );
 
             // If a --peer argument is provided, set PEER_ADDRS directly.
             if let Some(peer_str) = peer {

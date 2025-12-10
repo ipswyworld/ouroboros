@@ -1,6 +1,6 @@
 from fastapi import FastAPI, HTTPException
 from models import User, TransactionRequest
-from services import create_user, send_tokens, get_balance
+from services import create_user, send_tokens, get_balance, get_history
 
 app = FastAPI()
 
