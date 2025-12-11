@@ -55,6 +55,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use sled_storage::{batch_put, open_db, put, RocksDb};
 use uuid::Uuid;
+use axum::{Router, routing::get};
 use rustls_pemfile::{certs, pkcs8_private_keys};
 use std::io::BufReader;
 use tokio_rustls::rustls;
@@ -601,6 +602,55 @@ pub async fn run() -> std::io::Result<()> {
             // open default (sled) DB (or RocksDB if configured)
             let db_path = std::env::var("ROCKSDB_PATH").unwrap_or_else(|_| "sled_data".into());
             let db: RocksDb = open_db(&db_path);
+
+            // Check if we're running in lightweight mode (RocksDB-only, no PostgreSQL)
+            let storage_mode = std::env::var("STORAGE_MODE")
+                .unwrap_or_else(|_| "postgres".into())
+                .to_lowercase();
+
+            if storage_mode.contains("rocks") {
+                println!("🌐 Starting lightweight node (RocksDB-only mode, no PostgreSQL required)");
+                println!("✅ RocksDB opened at: {}", db_path);
+
+                // Start P2P network
+                let listen = std::env::var("LISTEN_ADDR").unwrap_or_else(|_| "0.0.0.0:9000".into());
+                let tor_config = tor::TorConfig::from_env();
+                let (bcast_sender, mut inbound_rx, peer_store) = start_network(&listen, Some(tor_config)).await;
+                println!("✅ P2P network started on {}", listen);
+
+                // Start minimal API server (just health check)
+                let api_addr = std::env::var("API_ADDR").unwrap_or_else(|_| "0.0.0.0:8000".into());
+                let api_addr_parsed: SocketAddr = api_addr.parse()
+                    .map_err(|e| {
+                        eprintln!("❌ Invalid API_ADDR format: '{}': {}", api_addr, e);
+                        std::io::Error::new(std::io::ErrorKind::InvalidInput, e)
+                    })?;
+
+                // Create minimal router with just health endpoint
+                let app = Router::new()
+                    .route("/health", get(|| async { "OK" }))
+                    .route("/", get(|| async { "Ouroboros Lightweight Node" }));
+
+                println!("\n🎉 Lightweight node running!");
+                println!("   P2P: {}", listen);
+                println!("   API: http://{}", api_addr);
+                println!("   Storage: RocksDB ({})", db_path);
+
+                // Run API server
+                println!("🚀 Starting API server (HTTP only) on http://{}", api_addr_parsed);
+                if let Err(e) = axum_server::bind(api_addr_parsed)
+                    .serve(app.into_make_service_with_connect_info::<SocketAddr>())
+                    .await
+                {
+                    eprintln!(
+                        "❌ API server (HTTP) crashed unexpectedly on {}: {}\
+                        \n   Check if port is already in use or permissions are correct.",
+                        api_addr_parsed, e
+                    );
+                    return Err(std::io::Error::new(std::io::ErrorKind::Other, e));
+                }
+                return Ok(());
+            }
 
             // Postgres pool for API
             let database_url = std::env::var("DATABASE_URL")
