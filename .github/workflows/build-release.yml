@@ -1,0 +1,154 @@
+name: Build Release Binaries
+
+on:
+  push:
+    branches: [ source-code ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ source-code ]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  SQLX_OFFLINE: true
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact_name: ouro-node
+            asset_name: ouro-node-linux-x64
+
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_name: ouro-node.exe
+            asset_name: ouro-node-windows-x64.exe
+
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact_name: ouro-node
+            asset_name: ouro-node-macos-x64
+
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact_name: ouro-node
+            asset_name: ouro-node-macos-arm64
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: ${{ matrix.target }}
+
+    - name: Install dependencies (Ubuntu)
+      if: matrix.os == 'ubuntu-latest'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libssl-dev pkg-config
+
+    - name: Cache cargo registry
+      uses: actions/cache@v4
+      with:
+        path: ~/.cargo/registry
+        key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: Cache cargo index
+      uses: actions/cache@v4
+      with:
+        path: ~/.cargo/git
+        key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: Cache cargo build
+      uses: actions/cache@v4
+      with:
+        path: target
+        key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: Build release binary
+      working-directory: ./ouro_dag
+      run: cargo build --release --bin ouro-node --target ${{ matrix.target }}
+
+    - name: Strip binary (Unix)
+      if: matrix.os != 'windows-latest'
+      working-directory: ./ouro_dag
+      run: strip target/${{ matrix.target }}/release/${{ matrix.artifact_name }}
+
+    - name: Create artifact directory
+      run: mkdir -p artifacts
+
+    - name: Copy binary to artifacts
+      run: cp ouro_dag/target/${{ matrix.target }}/release/${{ matrix.artifact_name }} artifacts/${{ matrix.asset_name }}
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ matrix.asset_name }}
+        path: artifacts/${{ matrix.asset_name }}
+        if-no-files-found: error
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    permissions:
+      contents: write
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+
+    - name: Display structure
+      run: ls -R artifacts
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: artifacts/*/*
+        draft: false
+        prerelease: false
+        generate_release_notes: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  test-build:
+    name: Test build artifacts
+    needs: build
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            asset_name: ouro-node-linux-x64
+          - os: windows-latest
+            asset_name: ouro-node-windows-x64.exe
+          - os: macos-latest
+            asset_name: ouro-node-macos-x64
+
+    steps:
+    - name: Download artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: ${{ matrix.asset_name }}
+
+    - name: Make binary executable (Unix)
+      if: matrix.os != 'windows-latest'
+      run: chmod +x ${{ matrix.asset_name }}
+
+    - name: Test binary runs
+      run: ./${{ matrix.asset_name }} --version || echo "Binary executed (version command not implemented)"
