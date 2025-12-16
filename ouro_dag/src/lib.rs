@@ -624,9 +624,10 @@ pub async fn run() -> std::io::Result<()> {
                     println!("🔍 PEER_ADDRS env var: '{}'", peer_addrs_env);
 
                     let store = peer_store.lock().await;
-                    println!("🔍 Peer store has {} peer(s)", store.len());
+                    println!("🔍 Peer store has {} peer(s):", store.len());
                     for (i, p) in store.iter().enumerate() {
-                        println!("   [{}] {}", i, p.addr);
+                        println!("   [{}] {} (failures: {}, last_seen: {:?})",
+                            i, p.addr, p.failures, p.last_seen_unix);
                     }
                 }
 
