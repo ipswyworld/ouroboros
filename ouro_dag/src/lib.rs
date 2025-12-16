@@ -26,6 +26,9 @@ pub mod tor;
 pub mod multisig;
 pub mod peer_discovery;
 pub mod validator_registration;
+pub mod node_identity;   // v0.3.0 - Node identity management
+pub mod wallet_link;     // v0.3.0 - Wallet linking with dual signatures
+pub mod auto_update;     // v0.3.0 - Automatic update checking
 
 use crate::reconciliation::finalize_block;
 
@@ -612,6 +615,137 @@ pub async fn run() -> std::io::Result<()> {
                 println!("🌐 Starting lightweight node (RocksDB-only mode, no PostgreSQL required)");
                 println!("✅ RocksDB opened at: {}", db_path);
 
+                // ==================== v0.3.0 FEATURE INTEGRATION ====================
+
+                // Load or create node identity
+                let identity_path_str = std::env::var("IDENTITY_PATH")
+                    .unwrap_or_else(|_| format!("{}/.node_identity.json", db_path));
+                let identity_path = Path::new(&identity_path_str);
+                let identity = node_identity::NodeIdentity::load_or_create(identity_path)
+                    .map_err(|e| {
+                        eprintln!("❌ Failed to load node identity: {}", e);
+                        std::io::Error::new(std::io::ErrorKind::Other, e)
+                    })?;
+
+                println!("\n🆔 Node Identity:");
+                println!("   Node Number: #{}", identity.node_number);
+                println!("   Node ID: {}", identity.short_id());
+                if let Some(name) = &identity.public_name {
+                    println!("   Name: {}", name);
+                }
+                println!("   Total Uptime: {}", identity.formatted_uptime());
+
+                // Load or generate node keypair for wallet linking
+                let keypair_path_str = std::env::var("NODE_KEYPAIR_PATH")
+                    .unwrap_or_else(|_| format!("{}/.node_keypair", db_path));
+                let keypair_path = Path::new(&keypair_path_str);
+
+                let node_keypair = if keypair_path.exists() {
+                    crate::crypto::load_signing_key(keypair_path)
+                        .map_err(|e| {
+                            eprintln!("❌ Failed to load node keypair: {}", e);
+                            std::io::Error::new(std::io::ErrorKind::Other, e)
+                        })?
+                } else {
+                    println!("🔑 Generating new node keypair...");
+                    crate::crypto::generate_and_write_signing_key(keypair_path)
+                        .map_err(|e| {
+                            eprintln!("❌ Failed to generate node keypair: {}", e);
+                            std::io::Error::new(std::io::ErrorKind::Other, e)
+                        })?
+                };
+
+                let node_pubkey_hex = hex::encode(node_keypair.verifying_key().to_bytes());
+                println!("   Node Public Key: {}...", &node_pubkey_hex[..16]);
+
+                // Wrap for sharing with API handlers
+                let node_keypair_arc = Arc::new(node_keypair);
+
+                // Load wallet link if exists
+                let wallet_link_path_str = std::env::var("WALLET_LINK_PATH")
+                    .unwrap_or_else(|_| format!("{}/.wallet_link.json", db_path));
+                let wallet_link_path = Path::new(&wallet_link_path_str);
+                let wallet_link = wallet_link::WalletLink::load(wallet_link_path)
+                    .ok()
+                    .flatten();
+
+                if let Some(ref link) = wallet_link {
+                    println!("\n💰 Wallet Linked:");
+                    println!("   Address: {}", link.wallet_address);
+                    println!("   Linked at: {}", link.linked_at);
+                } else {
+                    println!("\n🔓 No wallet linked");
+                }
+
+                // Load update config and start background checker
+                let update_config_path_str = std::env::var("UPDATE_CONFIG_PATH")
+                    .unwrap_or_else(|_| format!("{}/.update_config.json", db_path));
+                let update_config_path = Path::new(&update_config_path_str);
+                let update_config = auto_update::UpdateConfig::load_or_default(update_config_path)
+                    .map_err(|e| {
+                        eprintln!("⚠️  Failed to load update config: {}", e);
+                        std::io::Error::new(std::io::ErrorKind::Other, e)
+                    })?;
+
+                let update_config_arc = Arc::new(Mutex::new(update_config.clone()));
+
+                // Start background update checker task
+                let update_config_clone = update_config_arc.clone();
+                let update_config_path_clone = update_config_path_str.clone();
+                tokio::spawn(async move {
+                    loop {
+                        // Sleep for 1 hour
+                        tokio::time::sleep(tokio::time::Duration::from_secs(3600)).await;
+
+                        // Check if we should perform check
+                        let should_check = {
+                            let cfg = update_config_clone.lock().await;
+                            cfg.should_check_now()
+                        };
+
+                        if !should_check {
+                            continue;
+                        }
+
+                        // Perform update check
+                        match auto_update::check_for_updates(&env!("CARGO_PKG_VERSION")).await {
+                            Ok(Some(update_info)) => {
+                                println!("\n🆕 Update available: {} (current: {})",
+                                    update_info.version,
+                                    env!("CARGO_PKG_VERSION"));
+                                println!("   Download: {}", update_info.download_url);
+                                println!("   Run 'cargo build --release' to upgrade\n");
+
+                                // Update config
+                                let mut cfg = update_config_clone.lock().await;
+                                cfg.last_check = Some(chrono::Utc::now().to_rfc3339());
+                                let _ = cfg.save(Path::new(&update_config_path_clone));
+                            }
+                            Ok(None) => {
+                                println!("✅ No updates available (running latest version)");
+
+                                // Update last_check timestamp
+                                let mut cfg = update_config_clone.lock().await;
+                                cfg.last_check = Some(chrono::Utc::now().to_rfc3339());
+                                let _ = cfg.save(Path::new(&update_config_path_clone));
+                            }
+                            Err(e) => {
+                                eprintln!("⚠️  Update check failed: {}", e);
+                            }
+                        }
+                    }
+                });
+
+                println!("🔄 Auto-updates: {}", if update_config.auto_check_enabled { "Enabled" } else { "Disabled" });
+                if let Some(last_check) = &update_config.last_check {
+                    if let Ok(last_check_dt) = chrono::DateTime::parse_from_rfc3339(last_check) {
+                        let elapsed = chrono::Utc::now().signed_duration_since(last_check_dt.with_timezone(&chrono::Utc));
+                        println!("   Last check: {} hours ago", elapsed.num_hours());
+                    }
+                }
+
+                // ==================== END v0.3.0 INTEGRATION ====================
+
                 // Start P2P network
                 let listen = std::env::var("LISTEN_ADDR").unwrap_or_else(|_| "0.0.0.0:9000".into());
                 let tor_config = tor::TorConfig::from_env();
@@ -650,10 +784,176 @@ pub async fn run() -> std::io::Result<()> {
                         std::io::Error::new(std::io::ErrorKind::InvalidInput, e)
                     })?;
 
-                // Create minimal router with just health endpoint
+                // Create router with v0.3.0 API endpoints
+                use axum::{extract::State, http::StatusCode, response::Json};
+
+                // Prepare shared state for API handlers
+                let identity_arc = Arc::new(Mutex::new(identity));
+                let identity_path_arc = Arc::new(identity_path_str.clone());
+                let wallet_link_arc = Arc::new(Mutex::new(wallet_link));
+                let wallet_link_path_arc = Arc::new(wallet_link_path_str.clone());
+                let node_keypair_for_api = node_keypair_arc.clone();
+                let update_config_for_api = update_config_arc.clone();
+                let update_config_path_arc = Arc::new(update_config_path_str.clone());
+
                 let app = Router::new()
                     .route("/health", get(|| async { "OK" }))
-                    .route("/", get(|| async { "Ouroboros Lightweight Node" }));
+                    .route("/", get(|| async { "Ouroboros Lightweight Node v0.3.0" }))
+                    // Node Identity endpoints
+                    .route("/identity", get({
+                        let identity = identity_arc.clone();
+                        move || async move {
+                            let id = identity.lock().await;
+                            Json(id.clone())
+                        }
+                    }))
+                    .route("/identity/name", post({
+                        let identity = identity_arc.clone();
+                        let path = identity_path_arc.clone();
+                        move |Json(payload): Json<serde_json::Value>| async move {
+                            let name = payload.get("name")
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string());
+
+                            let mut id = identity.lock().await;
+                            id.set_public_name(name)
+                                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+                            id.save(Path::new(&**path))
+                                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+                            Ok::<Json<node_identity::NodeIdentity>, StatusCode>(Json(id.clone()))
+                        }
+                    }))
+                    // Wallet Link endpoints
+                    .route("/wallet/link", get({
+                        let link = wallet_link_arc.clone();
+                        move || async move {
+                            let link_opt = link.lock().await;
+                            match &*link_opt {
+                                Some(l) => Json(serde_json::json!({
+                                    "linked": true,
+                                    "wallet_address": l.wallet_address,
+                                    "linked_at": l.linked_at,
+                                    "node_public_key": l.node_public_key
+                                })),
+                                None => Json(serde_json::json!({
+                                    "linked": false,
+                                    "message": "No wallet linked"
+                                }))
+                            }
+                        }
+                    }))
+                    .route("/wallet/link", post({
+                        let link = wallet_link_arc.clone();
+                        let path = wallet_link_path_arc.clone();
+                        let keypair = node_keypair_for_api.clone();
+
+                        move |Json(payload): Json<serde_json::Value>| async move {
+                            let wallet_address = payload.get("wallet_address")
+                                .and_then(|v| v.as_str())
+                                .ok_or((StatusCode::BAD_REQUEST, "Missing wallet_address"))?;
+
+                            let wallet_signature = payload.get("wallet_signature")
+                                .and_then(|v| v.as_str())
+                                .ok_or((StatusCode::BAD_REQUEST, "Missing wallet_signature"))?;
+
+                            // Create wallet link with dual signatures
+                            let new_link = wallet_link::WalletLink::create(
+                                wallet_address.to_string(),
+                                &keypair,
+                                wallet_signature.to_string(),
+                            ).map_err(|e| {
+                                (StatusCode::BAD_REQUEST, format!("Failed to create link: {}", e))
+                            })?;
+
+                            // Verify signatures
+                            if !new_link.verify_node_signature().unwrap_or(false) {
+                                return Err((StatusCode::BAD_REQUEST, "Signature verification failed".to_string()));
+                            }
+
+                            // Save to disk
+                            new_link.save(Path::new(&**path)).map_err(|e| {
+                                (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to save link: {}", e))
+                            })?;
+
+                            // Update shared state
+                            *link.lock().await = Some(new_link.clone());
+
+                            Ok::<Json<serde_json::Value>, (StatusCode, String)>(Json(serde_json::json!({
+                                "success": true,
+                                "message": "Wallet linked successfully",
+                                "link": new_link
+                            })))
+                        }
+                    }))
+                    .route("/wallet/unlink", delete({
+                        let link = wallet_link_arc.clone();
+                        let path = wallet_link_path_arc.clone();
+
+                        move || async move {
+                            wallet_link::WalletLink::unlink(Path::new(&**path))
+                                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+                            *link.lock().await = None;
+
+                            Ok::<Json<serde_json::Value>, StatusCode>(Json(serde_json::json!({
+                                "success": true,
+                                "message": "Wallet unlinked successfully"
+                            })))
+                        }
+                    }))
+                    // Update endpoints
+                    .route("/updates/check", get({
+                        let config = update_config_for_api.clone();
+                        move || async move {
+                            let cfg = config.lock().await;
+                            match auto_update::check_for_updates(&cfg.current_version).await {
+                                Ok(Some(update)) => Json(serde_json::json!({
+                                    "update_available": true,
+                                    "version": update.version,
+                                    "download_url": update.download_url,
+                                    "published_at": update.published_at
+                                })),
+                                Ok(None) => Json(serde_json::json!({
+                                    "update_available": false,
+                                    "current_version": cfg.current_version
+                                })),
+                                Err(e) => Json(serde_json::json!({
+                                    "error": format!("Update check failed: {}", e)
+                                }))
+                            }
+                        }
+                    }))
+                    .route("/updates/config", get({
+                        let config = update_config_for_api.clone();
+                        move || async move {
+                            let cfg = config.lock().await;
+                            Json(cfg.clone())
+                        }
+                    }))
+                    .route("/updates/config", post({
+                        let config = update_config_for_api.clone();
+                        let path = update_config_path_arc.clone();
+
+                        move |Json(payload): Json<serde_json::Value>| async move {
+                            let mut cfg = config.lock().await;
+
+                            if let Some(enabled) = payload.get("auto_check_enabled").and_then(|v| v.as_bool()) {
+                                cfg.auto_check_enabled = enabled;
+                            }
+                            if let Some(interval) = payload.get("check_interval_hours").and_then(|v| v.as_u64()) {
+                                cfg.check_interval_hours = interval;
+                            }
+                            if let Some(channel) = payload.get("channel").and_then(|v| v.as_str()) {
+                                cfg.channel = channel.to_string();
+                            }
+
+                            cfg.save(Path::new(&**path))
+                                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+                            Ok::<Json<auto_update::UpdateConfig>, StatusCode>(Json(cfg.clone()))
+                        }
+                    }));
 
                 println!("\n🎉 Lightweight node running!");
                 println!("   P2P: {}", listen);
