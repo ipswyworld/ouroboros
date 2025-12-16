@@ -618,6 +618,29 @@ pub async fn run() -> std::io::Result<()> {
                 let (bcast_sender, mut inbound_rx, peer_store) = start_network(&listen, Some(tor_config)).await;
                 println!("✅ P2P network started on {}", listen);
 
+                // Debug: Check PEER_ADDRS and peer_store
+                {
+                    let peer_addrs_env = std::env::var("PEER_ADDRS").unwrap_or_default();
+                    println!("🔍 PEER_ADDRS env var: '{}'", peer_addrs_env);
+
+                    let store = peer_store.lock().await;
+                    println!("🔍 Peer store has {} peer(s)", store.len());
+                    for (i, p) in store.iter().enumerate() {
+                        println!("   [{}] {}", i, p.addr);
+                    }
+                }
+
+                // Spawn task to process inbound transactions (keep connections alive)
+                tokio::spawn(async move {
+                    println!("📨 Started inbound transaction processor for lightweight node");
+                    while let Some(tx) = inbound_rx.recv().await {
+                        // For lightweight nodes, just log received transactions
+                        // (full nodes would process them into the mempool and database)
+                        println!("📥 Received transaction: {} from peer", tx.id);
+                    }
+                    println!("📭 Inbound transaction processor stopped");
+                });
+
                 // Start minimal API server (just health check)
                 let api_addr = std::env::var("API_ADDR").unwrap_or_else(|_| "0.0.0.0:8000".into());
                 let api_addr_parsed: SocketAddr = api_addr.parse()
