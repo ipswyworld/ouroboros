@@ -1,0 +1,66 @@
+# Rust source code (NO SOURCE CODE IN REPO)
+ouro_dag/src/
+ouro_sdk/src/
+ouro_wallet/src/
+
+# Build artifacts
+target/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Cargo files
+Cargo.lock
+
+# Database files
+sled_data/
+rocksdb_data/
+*.db/
+node*_data/
+test_data/
+fresh_test_node/
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Keys and secrets
+*.pem
+*.key
+*.pub
+migration_signing.*
+peers.json
+
+# Logs
+*.log
+nul
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Test outputs
+benchmark_*.txt
+test_output.log
+
+# Temporary files
+*.bak
+*.tmp
+
+# Archives
+*.tar.gz
+*.zip

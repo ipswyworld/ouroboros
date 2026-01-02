@@ -27,6 +27,28 @@ That's it! Your node will automatically:
 
 ---
 
+## Midgard Wallet
+
+Use the included Midgard wallet to manage your OURO coins:
+
+```bash
+cd midgard_wallet
+cargo build --release
+
+# Check node status
+cargo run --release -- --node-url http://34.57.121.217:8000 status
+
+# Check your balance
+cargo run --release -- --node-url http://34.57.121.217:8000 balance
+
+# Send OURO
+cargo run --release -- --node-url http://34.57.121.217:8000 send <recipient> <amount>
+```
+
+**Current Node**: http://34.57.121.217:8000 (GCP Full Node)
+
+---
+
 ## What is Ouroboros?
 
 Ouroboros is a **hybrid Byzantine Fault Tolerant (BFT) blockchain** that combines:
