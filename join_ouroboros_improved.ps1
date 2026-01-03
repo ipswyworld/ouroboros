@@ -57,95 +57,100 @@ cd /d %USERPROFILE%\.ouroboros
 start /min ouro-node.exe start
 "@ | Set-Content "$nodeDir\start-node.bat"
 
-# Create ouro CLI
+# Create ouro CLI (PowerShell)
+@'
+$nodeDir = "$env:USERPROFILE\.ouroboros"
+cd $nodeDir
+
+switch ($args[0]) {
+    "status" {
+        Write-Host "`n=========================================="
+        Write-Host "   OUROBOROS NODE STATUS"
+        Write-Host "=========================================="
+        $nodeId = if (Test-Path "node_id.txt") { Get-Content "node_id.txt" } else { "Unknown" }
+        $wallet = if (Test-Path "wallet.txt") { Get-Content "wallet.txt" } else { "Unknown" }
+        $running = Get-Process ouro-node -ErrorAction SilentlyContinue
+        if ($running) {
+            Write-Host "Status: RUNNING" -ForegroundColor Green
+        } else {
+            Write-Host "Status: STOPPED" -ForegroundColor Red
+        }
+        Write-Host "Node ID: $nodeId"
+        Write-Host "Wallet: $wallet"
+        Write-Host ""
+        try {
+            $health = Invoke-WebRequest -Uri "http://localhost:8001/health" -UseBasicParsing -TimeoutSec 2 -ErrorAction Stop
+            Write-Host "API: http://localhost:8001" -ForegroundColor Green
+            Write-Host ""
+            Write-Host "Check rewards: ouro rewards"
+            Write-Host "Wallet balance: ouro wallet balance"
+        } catch {
+            Write-Host "API: Offline" -ForegroundColor Red
+        }
+        Write-Host ""
+        Write-Host "Commands: ouro start|stop|wallet|rewards"
+        Write-Host "=========================================="
+    }
+    "start" {
+        Write-Host "Starting Ouroboros node..."
+        Start-Process -FilePath "$nodeDir\ouro-node.exe" -ArgumentList "start" -WindowStyle Hidden -WorkingDirectory $nodeDir
+        Start-Sleep 3
+        & $PSCommandPath status
+    }
+    "stop" {
+        Write-Host "Stopping Ouroboros node..."
+        Get-Process ouro-node -ErrorAction SilentlyContinue | Stop-Process -Force
+        Write-Host "Node stopped"
+    }
+    "wallet" {
+        if ($args[1] -eq "balance") {
+            $wallet = if (Test-Path "wallet.txt") { Get-Content "wallet.txt" } else { "Not created" }
+            Write-Host "Checking balance for $wallet..."
+            try {
+                $balance = Invoke-WebRequest -Uri "http://localhost:8001/balance/$wallet" -UseBasicParsing -TimeoutSec 5
+                Write-Host $balance.Content
+            } catch {
+                Write-Host "Error: API offline or unreachable" -ForegroundColor Red
+            }
+        } else {
+            $wallet = if (Test-Path "wallet.txt") { Get-Content "wallet.txt" } else { "Not created" }
+            Write-Host "Your Wallet: $wallet"
+            Write-Host ""
+            Write-Host "Commands:"
+            Write-Host "  ouro wallet balance  - Check balance"
+        }
+    }
+    "rewards" {
+        $nodeId = if (Test-Path "node_id.txt") { Get-Content "node_id.txt" } else { "Unknown" }
+        Write-Host "Fetching rewards for $nodeId..."
+        try {
+            $rewards = Invoke-WebRequest -Uri "http://localhost:8001/metrics/$nodeId" -UseBasicParsing -TimeoutSec 5
+            Write-Host $rewards.Content
+        } catch {
+            Write-Host "Error: API offline or unreachable" -ForegroundColor Red
+        }
+    }
+    default {
+        Write-Host ""
+        Write-Host "Ouroboros Node CLI"
+        Write-Host ""
+        Write-Host "Usage: ouro [command]"
+        Write-Host ""
+        Write-Host "Commands:"
+        Write-Host "  status   - Show node status"
+        Write-Host "  start    - Start node"
+        Write-Host "  stop     - Stop node"
+        Write-Host "  wallet   - Show wallet address"
+        Write-Host "  rewards  - Check earned rewards"
+        Write-Host ""
+    }
+}
+'@ | Set-Content "$nodeDir\ouro.ps1"
+
+# Create batch wrapper
 @"
 @echo off
-setlocal enabledelayedexpansion
-cd /d %USERPROFILE%\.ouroboros
-
-if "%1"=="status" goto status
-if "%1"=="start" goto start
-if "%1"=="stop" goto stop
-if "%1"=="wallet" goto wallet
-if "%1"=="rewards" goto rewards
-goto help
-
-:status
-echo.
-echo ==========================================
-echo    🌐 OUROBOROS NODE STATUS
-echo ==========================================
-if exist node_id.txt (set /p NODE_ID=<node_id.txt) else (set NODE_ID=Unknown)
-if exist wallet.txt (set /p WALLET=<wallet.txt) else (set WALLET=Unknown)
-tasklist /FI "IMAGENAME eq ouro-node.exe" 2>NUL | find /I /N "ouro-node.exe">NUL
-if "%ERRORLEVEL%"=="0" (
-    echo Status: 🟢 RUNNING
-) else (
-    echo Status: 🔴 STOPPED
-)
-echo Node ID: %NODE_ID%
-echo Wallet: %WALLET%
-echo.
-curl -s http://localhost:8001/health >NUL 2>&1
-if %ERRORLEVEL%==0 (
-    echo API: 🟢 http://localhost:8001
-    echo.
-    echo 💰 Check rewards: ouro rewards
-    echo 👛 Wallet balance: ouro wallet balance
-) else (
-    echo API: 🔴 Offline
-)
-echo.
-echo Commands: ouro start^|stop^|wallet^|rewards
-echo ==========================================
-goto end
-
-:start
-echo Starting Ouroboros node...
-start-node.bat
-timeout /t 3 >nul
-ouro status
-goto end
-
-:stop
-taskkill /IM ouro-node.exe /F
-echo Node stopped
-goto end
-
-:wallet
-if "%2"=="balance" (
-    if exist wallet.txt (set /p WALLET=<wallet.txt)
-    echo Checking balance for !WALLET!...
-    curl -s "http://localhost:8001/balance/!WALLET!"
-) else (
-    if exist wallet.txt (set /p WALLET=<wallet.txt) else (set WALLET=Not created)
-    echo Your Wallet: !WALLET!
-    echo.
-    echo Commands:
-    echo   ouro wallet balance  - Check balance
-)
-goto end
-
-:rewards
-if exist node_id.txt (set /p NODE_ID=<node_id.txt)
-echo Fetching rewards for !NODE_ID!...
-curl -s "http://localhost:8001/metrics/!NODE_ID!"
-goto end
-
-:help
-echo.
-echo Ouroboros Node CLI
-echo.
-echo Usage: ouro [command]
-echo.
-echo Commands:
-echo   status   - Show node status
-echo   start    - Start node
-echo   stop     - Stop node
-echo   wallet   - Show wallet address
-echo   rewards  - Check earned rewards
-echo.
-:end
+powershell -NoProfile -ExecutionPolicy Bypass -File "%USERPROFILE%\.ouroboros\ouro.ps1" %*
 "@ | Set-Content "$nodeDir\ouro.bat"
 
 # Add to PATH if not already there
