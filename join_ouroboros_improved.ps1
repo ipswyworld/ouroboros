@@ -146,18 +146,24 @@ echo   wallet   - Show wallet address
 echo   rewards  - Check earned rewards
 echo.
 :end
-"@ | Set-Content "$env:SystemRoot\ouro.bat"
+"@ | Set-Content "$nodeDir\ouro.bat"
+
+# Add to PATH if not already there
+$userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+if ($userPath -notlike "*$nodeDir*") {
+    [Environment]::SetEnvironmentVariable("Path", "$userPath;$nodeDir", "User")
+}
 
 # Auto-start on boot
 Write-Host "[4/5] 🚀 Configuring auto-start..." -NoNewline
-if (-not $SkipAutoStart) {
+try {
     $action = New-ScheduledTaskAction -Execute "$nodeDir\start-node.bat"
     $trigger = New-ScheduledTaskTrigger -AtStartup -RandomDelay (New-TimeSpan -Seconds 30)
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
-    Register-ScheduledTask -TaskName "OuroborosNode" -Action $action -Trigger $trigger -Settings $settings -Force | Out-Null
+    Register-ScheduledTask -TaskName "OuroborosNode" -Action $action -Trigger $trigger -Settings $settings -Force -ErrorAction Stop | Out-Null
     Write-Host " ✅" -ForegroundColor Green
-} else {
-    Write-Host " ⏭️  Skipped" -ForegroundColor Yellow
+} catch {
+    Write-Host " ⏭️  Skipped (needs admin)" -ForegroundColor Yellow
 }
 
 # Start node
@@ -180,8 +186,9 @@ Write-Host "   Check rewards: ouro rewards"
 Write-Host "`n📝 Wallet saved to: $nodeDir\wallet.txt"
 Write-Host "   ⚠️  Backup this file - you'll need it to recover funds!"
 Write-Host "`n🎯 Quick Commands:" -ForegroundColor Cyan
-Write-Host "   ouro status   - Live node status"
-Write-Host "   ouro wallet   - Your wallet address"
-Write-Host "   ouro rewards  - Check earnings"
+Write-Host "   $nodeDir\ouro status   - Live node status"
+Write-Host "   $nodeDir\ouro wallet   - Your wallet address"
+Write-Host "   $nodeDir\ouro rewards  - Check earnings"
+Write-Host "`n⚠️  Restart terminal, then use: ouro status"
 Write-Host "`n🌐 Your node will auto-start with Windows"
 Write-Host "   Keep your PC online to maximize rewards!`n"
