@@ -12,16 +12,20 @@ Write-Host "`nSetting up your validator node..."
 # Create directories
 New-Item -ItemType Directory -Force -Path $nodeDir, $dataDir | Out-Null
 
-# Download binary
-Write-Host "`n[1/5] 📥 Downloading node binary..." -NoNewline
-$arch = if ([Environment]::Is64BitOperatingSystem) { "x86_64" } else { "i686" }
-$url = "https://github.com/ipswyworld/ouroboros/releases/latest/download/ouro-node-windows-$arch.exe"
-try {
-    Invoke-WebRequest -Uri $url -OutFile "$nodeDir\ouro-node.exe" -UseBasicParsing
-    Write-Host " ✅" -ForegroundColor Green
-} catch {
-    Write-Host " ❌ Failed" -ForegroundColor Red
-    exit 1
+# Get binary
+Write-Host "`n[1/5] 📥 Getting node binary..." -NoNewline
+if (Test-Path "$nodeDir\ouro-node.exe") {
+    Write-Host " ✅ (existing)" -ForegroundColor Green
+} else {
+    $localBuild = "C:\Users\LENOVO\Desktop\ouroboros\ouro_dag\target\release\ouro-node.exe"
+    if (Test-Path $localBuild) {
+        Copy-Item $localBuild "$nodeDir\ouro-node.exe"
+        Write-Host " ✅ (local)" -ForegroundColor Green
+    } else {
+        Write-Host " ❌ Not found" -ForegroundColor Red
+        Write-Host "`nPlease build first: cd ouroboros\ouro_dag && cargo build --release"
+        exit 1
+    }
 }
 
 # Create wallet
