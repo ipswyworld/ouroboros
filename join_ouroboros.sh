@@ -1,175 +1,196 @@
 #!/bin/bash
-# Ouroboros Network - Lightweight Node Setup
-# Join the decentralized network in minutes (no database required!)
-
 set -e
 
+NODE_DIR="$HOME/.ouroboros"
+DATA_DIR="$NODE_DIR/data"
+
+echo ""
 echo "=========================================="
-echo "  🌐 Ouroboros Network - Quick Join"
+echo "  WELCOME TO OUROBOROS NETWORK"
 echo "=========================================="
 echo ""
+echo "Setting up your validator node..."
 
-# Check if running as root
-if [ "$EUID" -eq 0 ]; then
-   echo "⚠️  Warning: Running as root is not recommended"
-   echo "   The node will be installed system-wide"
-   echo ""
-fi
+# Create directories
+mkdir -p "$NODE_DIR" "$DATA_DIR"
 
-# Detect architecture
+# Download binary
+echo ""
+echo -n "[1/5] Downloading node binary..."
 ARCH=$(uname -m)
-OS=$(uname -s | tr '[:upper:]' '[:lower:]')
-
-if [ "$OS" != "linux" ]; then
-    echo "❌ This script is for Linux. For Windows, use join_ouroboros.ps1"
+if [ "$ARCH" = "x86_64" ]; then
+    URL="https://github.com/ipswyworld/ouroboros/releases/latest/download/ouro-node-linux-x86_64"
+elif [ "$ARCH" = "aarch64" ]; then
+    URL="https://github.com/ipswyworld/ouroboros/releases/latest/download/ouro-node-linux-aarch64"
+else
+    echo " Unsupported architecture: $ARCH"
     exit 1
 fi
 
-case "$ARCH" in
-    x86_64)
-        BINARY_NAME="ouro-node-linux-x64"
-        ;;
-    aarch64|arm64)
-        BINARY_NAME="ouro-node-linux-arm64"
-        ;;
-    *)
-        echo "❌ Unsupported architecture: $ARCH"
-        echo "   Supported: x86_64, aarch64"
-        exit 1
-        ;;
-esac
-
-# Create installation directory
-INSTALL_DIR="$HOME/.ouroboros"
-mkdir -p "$INSTALL_DIR"
-cd "$INSTALL_DIR"
-
-echo "📥 Downloading Ouroboros node..."
-echo "   Architecture: $ARCH"
-echo ""
-
-# Download the latest release binary
-# TODO: Replace with your actual release URL
-DOWNLOAD_URL="https://github.com/ipswyworld/ouroboros/releases/latest/download/$BINARY_NAME"
-
-if command -v wget &> /dev/null; then
-    wget -q --show-progress -O ouro-node "$DOWNLOAD_URL" || {
-        echo "❌ Download failed. Building from source as fallback..."
-        echo "   This will take longer (15-30 minutes)..."
-        BUILD_FROM_SOURCE=true
-    }
-elif command -v curl &> /dev/null; then
-    curl -L --progress-bar -o ouro-node "$DOWNLOAD_URL" || {
-        echo "❌ Download failed. Building from source as fallback..."
-        BUILD_FROM_SOURCE=true
-    }
+if curl -sL "$URL" -o "$NODE_DIR/ouro-node" 2>/dev/null; then
+    chmod +x "$NODE_DIR/ouro-node"
+    echo " Done"
 else
-    echo "❌ Neither wget nor curl found. Installing curl..."
-    sudo apt update && sudo apt install -y curl
-    curl -L --progress-bar -o ouro-node "$DOWNLOAD_URL" || {
-        echo "❌ Download failed. Building from source as fallback..."
-        BUILD_FROM_SOURCE=true
-    }
+    echo " Failed"
+    exit 1
 fi
 
-# Fallback: Build from source if download fails
-if [ "$BUILD_FROM_SOURCE" = true ]; then
-    echo "📦 Installing dependencies..."
-    sudo apt update
-    sudo apt install -y build-essential pkg-config libssl-dev curl git clang libclang-dev
+# Create wallet
+echo -n "[2/5] Creating wallet..."
+WALLET_ADDR="0x$(openssl rand -hex 20)"
+NODE_ID="ouro_$(cat /dev/urandom | tr -dc 'a-z0-9' | fold -w 12 | head -n 1)"
+echo "$WALLET_ADDR" > "$NODE_DIR/wallet.txt"
+echo "$NODE_ID" > "$NODE_DIR/node_id.txt"
+echo " Done"
 
-    # Install Rust
-    if ! command -v cargo &> /dev/null; then
-        echo "🦀 Installing Rust..."
-        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-        source $HOME/.cargo/env
-    fi
+# Create config
+echo -n "[3/5] Configuring node..."
+cat > "$NODE_DIR/.env" <<ENVEOF
+ROCKSDB_PATH=$DATA_DIR
+STORAGE_MODE=rocks
+RUST_LOG=info
+API_ADDR=0.0.0.0:8001
+LISTEN_ADDR=0.0.0.0:9001
+NODE_ID=$NODE_ID
+SEED_NODES=136.112.101.176:9001
+ENVEOF
+echo " Done"
 
-    echo "📥 Cloning repository..."
-    cd /tmp
-    rm -rf ouroboros
-    git clone https://github.com/ipswyworld/ouroboros.git
-    cd ouroboros/ouro_dag
-
-    echo "🔨 Building node (this will take 15-30 minutes)..."
-    cargo build --release --bin ouro-node -j 2
-
-    cp target/release/ouro-node "$INSTALL_DIR/ouro-node"
-    cd "$INSTALL_DIR"
-fi
-
-chmod +x ouro-node
-
-echo "✅ Binary downloaded successfully"
-echo ""
-
-# Get seed node address (allow override via environment variable)
-SEED_NODE="${OUROBOROS_SEED:-136.112.101.176:9001}"
-
-echo "⚙️  Configuration:"
-echo "   Storage: RocksDB (lightweight, no database needed)"
-echo "   Data directory: $INSTALL_DIR/data"
-echo "   Seed node: $SEED_NODE"
-echo ""
-
-# Create systemd service for auto-restart
-SERVICE_FILE="$HOME/.config/systemd/user/ouroboros-node.service"
-mkdir -p "$HOME/.config/systemd/user"
-
-cat > "$SERVICE_FILE" <<EOF
+# Create systemd service
+echo -n "[4/5] Configuring auto-start..."
+sudo tee /etc/systemd/system/ouroboros.service > /dev/null <<SVCEOF
 [Unit]
-Description=Ouroboros Blockchain Node
+Description=Ouroboros Node
 After=network.target
 
 [Service]
 Type=simple
-WorkingDirectory=$INSTALL_DIR
-ExecStart=$INSTALL_DIR/ouro-node join --peer $SEED_NODE --storage rocksdb --rocksdb-path $INSTALL_DIR/data --api-port 8001 --p2p-port 9001
+User=$USER
+WorkingDirectory=$NODE_DIR
+ExecStart=$NODE_DIR/ouro-node start
 Restart=always
 RestartSec=10
-StandardOutput=append:$INSTALL_DIR/node.log
-StandardError=append:$INSTALL_DIR/node_error.log
 
 [Install]
-WantedBy=default.target
-EOF
+WantedBy=multi-user.target
+SVCEOF
 
-# Enable and start the service
-systemctl --user daemon-reload
-systemctl --user enable ouroboros-node.service
-systemctl --user start ouroboros-node.service
+sudo systemctl daemon-reload
+sudo systemctl enable ouroboros.service
+echo " Done"
 
-echo "🚀 Starting Ouroboros node..."
+# Create ouro CLI
+sudo tee /usr/local/bin/ouro > /dev/null <<'CLIEOF'
+#!/bin/bash
+NODE_DIR="$HOME/.ouroboros"
+
+case "$1" in
+    status)
+        echo ""
+        echo "=========================================="
+        echo "    OUROBOROS NODE STATUS"
+        echo "=========================================="
+        [ -f "$NODE_DIR/node_id.txt" ] && NODE_ID=$(cat "$NODE_DIR/node_id.txt") || NODE_ID="Unknown"
+        [ -f "$NODE_DIR/wallet.txt" ] && WALLET=$(cat "$NODE_DIR/wallet.txt") || WALLET="Unknown"
+
+        if systemctl is-active --quiet ouroboros; then
+            echo "Status: RUNNING"
+        else
+            echo "Status: STOPPED"
+        fi
+        echo "Node ID: $NODE_ID"
+        echo "Wallet: $WALLET"
+        echo ""
+
+        if curl -sf http://localhost:8001/health >/dev/null 2>&1; then
+            echo "API: http://localhost:8001"
+            echo ""
+            echo "Check rewards: ouro rewards"
+            echo "Wallet balance: ouro wallet balance"
+        else
+            echo "API: Offline"
+        fi
+        echo ""
+        echo "Commands: ouro start|stop|wallet|rewards"
+        echo "=========================================="
+        ;;
+    start)
+        echo "Starting Ouroboros node..."
+        sudo systemctl start ouroboros
+        sleep 3
+        ouro status
+        ;;
+    stop)
+        echo "Stopping Ouroboros node..."
+        sudo systemctl stop ouroboros
+        echo "Node stopped"
+        ;;
+    wallet)
+        if [ "$2" = "balance" ]; then
+            WALLET=$(cat "$NODE_DIR/wallet.txt" 2>/dev/null || echo "Not created")
+            echo "Checking balance for $WALLET..."
+            curl -s "http://localhost:8001/balance/$WALLET"
+        else
+            WALLET=$(cat "$NODE_DIR/wallet.txt" 2>/dev/null || echo "Not created")
+            echo "Your Wallet: $WALLET"
+            echo ""
+            echo "Commands:"
+            echo "  ouro wallet balance  - Check balance"
+        fi
+        ;;
+    rewards)
+        NODE_ID=$(cat "$NODE_DIR/node_id.txt" 2>/dev/null || echo "Unknown")
+        echo "Fetching rewards for $NODE_ID..."
+        curl -s "http://localhost:8001/metrics/$NODE_ID"
+        ;;
+    *)
+        echo ""
+        echo "Ouroboros Node CLI"
+        echo ""
+        echo "Usage: ouro [command]"
+        echo ""
+        echo "Commands:"
+        echo "  status   - Show node status"
+        echo "  start    - Start node"
+        echo "  stop     - Stop node"
+        echo "  wallet   - Show wallet address"
+        echo "  rewards  - Check earned rewards"
+        echo ""
+        ;;
+esac
+CLIEOF
+
+sudo chmod +x /usr/local/bin/ouro
+
+# Start node
+echo -n "[5/5] Starting node..."
+sudo systemctl start ouroboros
 sleep 3
+echo " Done"
+echo ""
 
-# Check if running
-if systemctl --user is-active --quiet ouroboros-node.service; then
-    echo ""
-    echo "=========================================="
-    echo "✅ Node started successfully!"
-    echo "=========================================="
-    echo ""
-    echo "🌐 Connected to: $SEED_NODE"
-    echo "💾 Storage: RocksDB (lightweight)"
-    echo "📂 Data directory: $INSTALL_DIR/data"
-    echo ""
-    echo "📊 Check logs:"
-    echo "   tail -f $INSTALL_DIR/node.log"
-    echo ""
-    echo "🔍 Check node status:"
-    echo "   curl http://localhost:8001/health"
-    echo ""
-    echo "🛠️  Manage node:"
-    echo "   systemctl --user status ouroboros-node"
-    echo "   systemctl --user stop ouroboros-node"
-    echo "   systemctl --user restart ouroboros-node"
-    echo ""
-    echo "🎉 You're now part of the Ouroboros network!"
-    echo "=========================================="
-else
-    echo ""
-    echo "❌ Error: Node failed to start"
-    echo "Check logs: tail -50 $INSTALL_DIR/node.log"
-    echo "Check errors: tail -50 $INSTALL_DIR/node_error.log"
-    exit 1
-fi
+# Success message
+echo "=========================================="
+echo "  SUCCESS! You're now validating!"
+echo "=========================================="
+echo ""
+echo "Your Node:"
+echo "   Node ID: $NODE_ID"
+echo "   Wallet:  $WALLET_ADDR"
+echo "   Status:  http://localhost:8001/health"
+echo ""
+echo "Earnings:"
+echo "   ~4.5 OURO/hour (based on uptime + validations)"
+echo "   Check rewards: ouro rewards"
+echo ""
+echo "Wallet saved to: $NODE_DIR/wallet.txt"
+echo "   Backup this file - you'll need it to recover funds!"
+echo ""
+echo "Quick Commands:"
+echo "   ouro status   - Live node status"
+echo "   ouro wallet   - Your wallet address"
+echo "   ouro rewards  - Check earnings"
+echo ""
+echo "Your node will auto-start on boot"
+echo "Keep your system online to maximize rewards!"
+echo ""
