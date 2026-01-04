@@ -71,9 +71,10 @@ switch ($args[0]) {
         $wallet = if (Test-Path "wallet.txt") { Get-Content "wallet.txt" } else { "Unknown" }
         $running = Get-Process ouro-node -ErrorAction SilentlyContinue
         if ($running) {
-            Write-Host "Status: RUNNING" -ForegroundColor Green
+            Write-Host "Status: RUNNING (PID: $($running.Id))" -ForegroundColor Green
         } else {
             Write-Host "Status: STOPPED" -ForegroundColor Red
+            Write-Host "Run 'ouro start' to start the node" -ForegroundColor Yellow
         }
         Write-Host "Node ID: $nodeId"
         Write-Host "Wallet: $wallet"
@@ -86,15 +87,27 @@ switch ($args[0]) {
             Write-Host "Wallet balance: ouro wallet balance"
         } catch {
             Write-Host "API: Offline" -ForegroundColor Red
+            if ($running) {
+                Write-Host "Node is running but API not responding. Check logs: ouro logs" -ForegroundColor Yellow
+            }
         }
         Write-Host ""
-        Write-Host "Commands: ouro start|stop|wallet|rewards"
+        Write-Host "Commands: ouro start|stop|logs|wallet|rewards"
         Write-Host "=========================================="
     }
     "start" {
         Write-Host "Starting Ouroboros node..."
-        Start-Process -FilePath "$nodeDir\ouro-node.exe" -ArgumentList "start" -WindowStyle Hidden -WorkingDirectory $nodeDir
-        Start-Sleep 3
+        if (-not (Test-Path "$nodeDir\ouro-node.exe")) {
+            Write-Host "Error: ouro-node.exe not found in $nodeDir" -ForegroundColor Red
+            return
+        }
+        if (-not (Test-Path "$nodeDir\.env")) {
+            Write-Host "Error: .env config not found in $nodeDir" -ForegroundColor Red
+            return
+        }
+        $proc = Start-Process -FilePath "$nodeDir\ouro-node.exe" -ArgumentList "start" -WorkingDirectory $nodeDir -PassThru
+        Write-Host "Started process $($proc.Id), waiting 5s for API..."
+        Start-Sleep 5
         & $PSCommandPath status
     }
     "stop" {
@@ -130,6 +143,20 @@ switch ($args[0]) {
             Write-Host "Error: API offline or unreachable" -ForegroundColor Red
         }
     }
+    "logs" {
+        if (Test-Path "node.log") {
+            Write-Host "Last 30 lines of node.log:" -ForegroundColor Cyan
+            Get-Content "node.log" -Tail 30
+        } else {
+            $running = Get-Process ouro-node -ErrorAction SilentlyContinue
+            if ($running) {
+                Write-Host "Node is running (PID: $($running.Id)) but no log file found" -ForegroundColor Yellow
+                Write-Host "Process started: $($running.StartTime)"
+            } else {
+                Write-Host "No log file found and node is not running" -ForegroundColor Red
+            }
+        }
+    }
     default {
         Write-Host ""
         Write-Host "Ouroboros Node CLI"
@@ -140,6 +167,7 @@ switch ($args[0]) {
         Write-Host "  status   - Show node status"
         Write-Host "  start    - Start node"
         Write-Host "  stop     - Stop node"
+        Write-Host "  logs     - View recent logs"
         Write-Host "  wallet   - Show wallet address"
         Write-Host "  rewards  - Check earned rewards"
         Write-Host ""
