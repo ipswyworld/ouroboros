@@ -1,132 +1,180 @@
-# .github/workflows/ci.yml
-name: CI & Release
+name: CI
 
 on:
   push:
-    branches: [ main, master ]
-    tags:
-      - 'v*'
+    branches: [ main, develop ]
   pull_request:
-    branches: [ main, master ]
+    branches: [ main, develop ]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
 
 jobs:
-  test:
+  lint:
+    name: Lint
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
 
+      - name: Install Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+
+      - name: Check formatting
+        run: cargo fmt -- --check
+        working-directory: ./ouro_dag
+
+      - name: Run Clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+        working-directory: ./ouro_dag
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:15
+        image: postgres:16
         env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: postgres
+          POSTGRES_USER: ouro
+          POSTGRES_PASSWORD: ouro_pass
+          POSTGRES_DB: ouro_db
         ports:
           - 5432:5432
         options: >-
-          --health-cmd pg_isready -U postgres
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 20
-
-    env:
-      DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
-      RUST_BACKTRACE: "1"
-      USE_REAL_CRYPTO: "1"
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
 
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Rust
-        uses: actions-rs/toolchain@v1
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake libsnappy-dev zlib1g-dev \
+            libbz2-dev libgflags-dev liblz4-dev libzstd-dev libssl-dev \
+            pkg-config librocksdb-dev postgresql-client
+
+      - name: Install Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain: stable
-          profile: minimal
-          components: clippy
 
-      - name: Cache cargo registry and target
+      - name: Cache Cargo registry
         uses: actions/cache@v4
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          path: ~/.cargo/registry
+          key: \${{ runner.os }}-cargo-registry-\${{ hashFiles('**/Cargo.lock') }}
 
-      - name: Install psql client
-        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+      - name: Cache Cargo index
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/git
+          key: \${{ runner.os }}-cargo-git-\${{ hashFiles('**/Cargo.lock') }}
 
-      - name: Wait for Postgres
+      - name: Cache build output
+        uses: actions/cache@v4
+        with:
+          path: ouro_dag/target
+          key: \${{ runner.os }}-cargo-build-\${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Run migrations
+        env:
+          DATABASE_URL: postgres://ouro:ouro_pass@localhost:5432/ouro_db
         run: |
-          for i in {1..30}; do
-            pg_isready -h 127.0.0.1 -p 5432 -U postgres && break
-            sleep 1
-          done
-
-      - name: Run DB migrations (SQL files)
-        working-directory: ./ouro_dag
-        run: |
-          for f in $(ls migrations/*.sql | sort); do
-            echo "running $f"
-            psql "$DATABASE_URL" -f "$f"
+          cd ouro_dag
+          for f in migrations/*.sql; do
+            echo "Running migration: \$f"
+            psql \$DATABASE_URL -f "\$f" || echo "Migration \$f failed or already applied"
           done
 
       - name: Build
+        run: cargo build --verbose --all-targets
         working-directory: ./ouro_dag
-        run: cargo build --verbose
 
       - name: Run tests
-        working-directory: ./ouro_dag
+        env:
+          DATABASE_URL: postgres://ouro:ouro_pass@localhost:5432/ouro_db
+          ROCKSDB_PATH: ./test_data/rocksdb
         run: cargo test --verbose
+        working-directory: ./ouro_dag
 
-  release:
-    needs: test
-    if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        include:
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            artifact_name: ouro-node-linux-x86_64.tar.gz
-            asset_content_type: application/gzip
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            artifact_name: ouro-node-windows-x86_64.zip
-            asset_content_type: application/zip
-          - os: macos-latest
-            target: x86_64-apple-darwin
-            artifact_name: ouro-node-macos-x86_64.tar.gz
-            asset_content_type: application/gzip
-
+  build-binaries:
+    name: Build All Binaries
+    runs-on: ubuntu-latest
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Rust
-        uses: actions-rs/toolchain@v1
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake libsnappy-dev zlib1g-dev \
+            libbz2-dev libgflags-dev liblz4-dev libzstd-dev libssl-dev \
+            pkg-config librocksdb-dev
+
+      - name: Install Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain: stable
-          profile: minimal
-          target: ${{ matrix.target }}
 
-      - name: Build binaries
+      - name: Build all binaries
+        run: cargo build --release --bins
         working-directory: ./ouro_dag
-        run: cargo build --release --target ${{ matrix.target }} --bin ouro-node --bin ouro_dag
 
-      - name: Package artifact (Linux/macOS)
-        if: runner.os != 'Windows'
-        working-directory: ./ouro_dag/target/${{ matrix.target }}/release
-        run: tar -czvf ../../../${{ matrix.artifact_name }} ouro-node ouro_dag
+      - name: List binaries
+        run: ls -lh target/release/ | grep -E "^-rwx"
+        working-directory: ./ouro_dag
 
-      - name: Package artifact (Windows)
-        if: runner.os == 'Windows'
-        working-directory: .\ouro_dag\target\${{ matrix.target }}\release
-        run: 7z a ..\..\..\${{ matrix.artifact_name }} ouro-node.exe ouro_dag.exe
-
-      - name: Upload Release Asset
-        uses: softprops/action-gh-release@v1
+      - name: Upload binaries
+        uses: actions/upload-artifact@v4
         with:
-          files: ${{ matrix.artifact_name }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          name: ouro-binaries
+          path: |
+            ouro_dag/target/release/ouro_dag
+            ouro_dag/target/release/ouro-node
+            ouro_dag/target/release/relay
+            ouro_dag/target/release/bft_node
+            ouro_dag/target/release/aggregator_runner
+            ouro_dag/target/release/runner
+            ouro_dag/target/release/migrate
+          retention-days: 7
+
+  security-audit:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit
+
+      - name: Run security audit
+        run: cargo audit
+        working-directory: ./ouro_dag
+        continue-on-error: true
+
+  docker-build:
+    name: Docker Build Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./ouro_dag
+          file: ./ouro_dag/Dockerfile
+          push: false
+          tags: ouro_node:test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

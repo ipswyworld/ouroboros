@@ -1,0 +1,135 @@
+=== DOCKER DEPLOYMENT STEPS ===
+
+STEP 1: Generate SQLx Cache (Windows Command Prompt)
+-------------------------------------------------------
+cd C:\Users\LENOVO\Desktop\ouroboros\ouro_dag
+
+# Make sure PostgreSQL is running with your database
+# Check with: docker ps | findstr postgres
+
+# Generate the SQLx query cache
+set DATABASE_URL=postgres://ouro:ouro_pass@127.0.0.1:15432/ouro_db_node1
+cargo sqlx prepare --workspace
+
+# This creates a .sqlx/ directory with cached query metadata
+
+
+STEP 2: Create Startup Script
+-------------------------------------------------------
+# Creating ops/wait-for-db-and-start.sh (done automatically)
+
+
+STEP 3: Build Docker Image (Windows Command Prompt)
+-------------------------------------------------------
+cd C:\Users\LENOVO\Desktop\ouroboros
+docker build -t ouroboros-node:latest -f ouro_dag/Dockerfile ouro_dag/
+
+# This will take ~30-40 minutes but only needs to be done once
+
+
+STEP 4: Test Locally (Windows Command Prompt)
+-------------------------------------------------------
+# Start just one node with PostgreSQL
+docker-compose up -d postgres-node1 node1
+
+# Check logs
+docker logs -f ouro_node1
+
+# Should see:
+#   🔧 Database connection pool: 100 max connections
+#   🚀 Starting API server on http://0.0.0.0:8001
+#   🧠 Ouroboros DAG engine running...
+
+# Test API
+curl http://localhost:8001/health
+
+# Stop when done testing
+docker-compose down
+
+
+STEP 5: Push to Docker Hub
+-------------------------------------------------------
+# Login to Docker Hub
+docker login
+
+# Tag image with your Docker Hub username
+docker tag ouroboros-node:latest YOUR_DOCKERHUB_USERNAME/ouroboros-node:latest
+
+# Push
+docker push YOUR_DOCKERHUB_USERNAME/ouroboros-node:latest
+
+
+STEP 6: Deploy to GCP
+-------------------------------------------------------
+# Create new VM with Docker pre-installed
+gcloud compute instances create ouro-node-1 \
+  --zone=us-central1-a \
+  --machine-type=e2-small \
+  --image-family=cos-stable \
+  --image-project=cos-cloud \
+  --boot-disk-size=30GB \
+  --tags=ouroboros-node
+
+# SSH to VM
+gcloud compute ssh ouro-node-1 --zone=us-central1-a
+
+# On the VM: Install docker-compose
+sudo curl -L "https://github.com/docker/compose/releases/download/v2.23.0/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+sudo chmod +x /usr/local/bin/docker-compose
+
+# Pull your image
+docker pull YOUR_DOCKERHUB_USERNAME/ouroboros-node:latest
+
+# Create docker-compose file (simplified for single node)
+cat > docker-compose.yml << 'EOF'
+version: "3.8"
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ouro
+      POSTGRES_PASSWORD: ouro_pass
+      POSTGRES_DB: ouro_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  ouro_node:
+    image: YOUR_DOCKERHUB_USERNAME/ouroboros-node:latest
+    environment:
+      NODE_ID: node-1
+      DATABASE_URL: postgres://ouro:ouro_pass@postgres:5432/ouro_db
+      API_ADDR: 0.0.0.0:8001
+      LISTEN_ADDR: 0.0.0.0:9001
+      BFT_PORT: "9091"
+      BFT_PEERS: ""
+      BFT_SECRET_SEED: "YOUR_GENERATED_SECRET"
+      ROCKSDB_PATH: /data/rocksdb
+    ports:
+      - "8001:8001"
+      - "9001:9001"
+      - "9091:9091"
+    volumes:
+      - node_data:/data
+    depends_on:
+      - postgres
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  node_data:
+EOF
+
+# Start
+docker-compose up -d
+
+# Check logs
+docker-compose logs -f ouro_node
+
+
+STEP 7: Verify
+-------------------------------------------------------
+# From your local machine, test the GCP node
+curl http://EXTERNAL_IP:8001/health
+
+# Success!

@@ -1,0 +1,93 @@
+# Fraud Detection System Configuration
+# Ouroboros v0.4.0
+
+[cross_chain]
+# Relayer bond requirement (in smallest units, 1 OURO = 100,000,000)
+relayer_bond = 10_000_000_000  # 100 OURO
+
+# Challenge period in seconds (10 minutes default)
+challenge_period_secs = 600
+
+# Fraud reward as percentage of slashed amount
+fraud_reward_percentage = 50
+
+# Confirmation reward for honest relayers (in smallest units)
+confirmation_reward = 1_000_000  # 0.01 OURO
+
+[microchain]
+# Minimum operator stake requirement (in smallest units)
+min_operator_stake = 1_000_000_000  # 10 OURO
+
+# Challenge period for state anchors in seconds (7 days default)
+challenge_period_secs = 604_800
+
+# Challenge bond requirement (in smallest units)
+challenge_bond = 10_000_000  # 0.1 OURO
+
+# Force exit delay in seconds (1 day default)
+force_exit_delay_secs = 86_400
+
+# Slash percentage for fraudulent operators
+slash_percentage = 50
+
+[monitoring]
+# Maximum failure rate before triggering alert (0.0 - 1.0)
+max_failure_rate = 0.10  # 10%
+
+# Maximum volume per hour (in smallest units)
+max_volume_per_hour = 100_000_000_000  # 1000 OURO
+
+# Maximum rapid transactions in short time window
+max_rapid_transactions = 100
+
+# Minimum anchor frequency in seconds (1 hour default)
+min_anchor_frequency = 3600
+
+# Number of alerts to keep in memory
+alert_retention_count = 1000
+
+# Enable automatic fraud proof submission
+auto_submit_fraud_proofs = true
+
+# Enable automatic blacklisting
+auto_blacklist = true
+
+# Blacklist threshold (number of violations before auto-blacklist)
+blacklist_threshold = 3
+
+[alerts]
+# Enable email notifications
+email_enabled = false
+email_address = "alerts@example.com"
+
+# Enable webhook notifications
+webhook_enabled = false
+webhook_url = "https://example.com/webhook"
+
+# Enable SMS notifications
+sms_enabled = false
+sms_phone = "+1234567890"
+
+# Alert levels to notify (Low, Medium, High, Critical)
+notify_levels = ["High", "Critical"]
+
+[performance]
+# Enable performance monitoring
+perf_monitoring_enabled = true
+
+# Metrics collection interval in seconds
+metrics_interval_secs = 60
+
+# Cleanup old alerts interval in seconds (1 hour)
+cleanup_interval_secs = 3600
+
+[development]
+# Enable verbose logging
+verbose_logging = false
+
+# Enable debug mode (additional checks and logging)
+debug_mode = false
+
+# Disable fraud detection (for testing only)
+# WARNING: Never set to true in production!
+disable_fraud_detection = false

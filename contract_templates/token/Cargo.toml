@@ -1,0 +1,20 @@
+[package]
+name = "ouro-token-template"
+version = "0.1.0"
+edition = "2021"
+authors = ["Ouroboros Contributors"]
+description = "ERC20-like token contract template for Ouroboros VM"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+[profile.release]
+opt-level = "z"     # Optimize for size
+lto = true          # Link-time optimization
+codegen-units = 1   # Single codegen unit for better optimization
+panic = "abort"     # Smaller binary
+strip = true        # Strip symbols

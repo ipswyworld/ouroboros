@@ -1,0 +1,31 @@
+# Cargo Configuration - Command Shortcuts
+
+[alias]
+# Testing shortcuts
+t = "test --lib"
+ta = "test --all"
+tf = "test --lib --features"
+
+# Build shortcuts
+b = "build"
+br = "build --release"
+c = "check"
+cr = "check --release"
+
+# Run shortcuts
+r = "run"
+rr = "run --release"
+
+# Cleanup
+clean-all = "clean"
+
+# Documentation
+d = "doc --no-deps --open"
+
+# Linting
+lint = "clippy -- -D warnings"
+fix = "fix --allow-dirty --allow-staged"
+
+# Format
+fmt-check = "fmt -- --check"
+fmt-all = "fmt --all"
